@@ -53,6 +53,6 @@ docker compose exec gateway node src/cli.mjs revoke DEVICE_ID
 .\scripts\local-ci.ps1 -Release
 ```
 
-调试 APK 生成在 mobile/build/outputs/apk/debug 和 wear/build/outputs/apk/debug。Release 编译产物默认未签名。开发顺序在 [ROADMAP.md](ROADMAP.md)，模拟器验收步骤在 [docs/AVD.md](docs/AVD.md)。
+调试 APK 生成在 mobile/build/outputs/apk/debug 和 wear/build/outputs/apk/debug。Release 编译产物默认未签名。开发顺序在 [ROADMAP.md](ROADMAP.md)，模拟器验收步骤在 [docs/AVD.md](docs/AVD.md)，本机实测见 [验收记录](docs/ACCEPTANCE.md)。
 
 项目采用 MIT 许可证。完成提醒由独立应用处理。

@@ -149,8 +149,9 @@ class WatchSync(context: Context) {
         }
         val current = view()
         val config = current.config
-        if (config != null && value.config.version < config.version) return
-        val retained = current.snapshot.takeIf { config?.mode == value.config.mode }
+        val sameRegistration = previous != null || storage.credentials() != null
+        if (sameRegistration && config != null && value.config.version < config.version) return
+        val retained = current.snapshot.takeIf { sameRegistration && config?.mode == value.config.mode }
         val provided = value.snapshot?.takeIf {
             value.config.mode == Mode.PHONE && !value.config.paused &&
                 (retained == null || it.retrievedAt >= retained.retrievedAt)
