@@ -31,6 +31,7 @@ internal fun SettingsHome(
     watchCount: Int,
     onServer: () -> Unit,
     onOverview: () -> Unit,
+    onRanges: () -> Unit,
     onQuotaLayout: () -> Unit,
     onWidget: () -> Unit,
     onWear: () -> Unit,
@@ -41,7 +42,9 @@ internal fun SettingsHome(
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SettingsHeading("显示与桌面")
             SettingsGroup {
-                SettingRow("编辑总览", "卡片显示与顺序", R.drawable.settings_grid, onClick = onOverview)
+                SettingRow("编辑总览", "展示队列和卡片顺序", R.drawable.settings_grid, onClick = onOverview)
+                SettingsDivider()
+                SettingRow("总览时间筛选", "最多固定 4 个常用范围", R.drawable.settings_grid, onClick = onRanges)
                 SettingsDivider()
                 SettingRow("额度页布局", icon = R.drawable.settings_layout, value = quotaLayout.label, onClick = onQuotaLayout)
                 SettingsDivider()

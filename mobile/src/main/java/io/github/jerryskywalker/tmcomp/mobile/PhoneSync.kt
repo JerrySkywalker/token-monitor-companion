@@ -61,7 +61,9 @@ class PhoneSync(context: Context) {
     suspend fun connect(credentials: HubConnection) = mutex.withLock {
         val previous = state()
         val old = storage.credentials()
-        val snapshot = Hub(credentials).snapshot(previous.snapshot.takeIf { old?.origin == credentials.origin })
+        val snapshot = Hub(credentials).snapshot(previous.snapshot.takeIf {
+            old?.origin == credentials.origin && old.secret == credentials.secret
+        }, extendedTrends = true)
         storage.saveCredentials(credentials)
         save(previous.copy(snapshot = snapshot, usageError = null))
         schedule(context)
@@ -73,9 +75,10 @@ class PhoneSync(context: Context) {
     private suspend fun refreshLocked() {
         val credentials = storage.credentials()
         val previous = state()
-        val usage = credentials?.let { attempt { Hub(it).snapshot(previous.snapshot) } }
+        val usage = credentials?.let { attempt { Hub(it).snapshot(previous.snapshot, extendedTrends = true) } }
         if (usage != null) {
-            save(previous.copy(snapshot = usage.getOrNull() ?: previous.snapshot, usageError = usage.exceptionOrNull()?.message))
+            save(previous.copy(snapshot = usage.getOrNull() ?: previous.snapshot,
+                usageError = usage.exceptionOrNull()?.let { it.message ?: "Hub 连接暂不可用" }))
         }
         syncWatches()
         usage?.getOrThrow()

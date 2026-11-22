@@ -80,13 +80,14 @@ class DashboardWidget : GlanceAppWidget() {
         val appWidgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
         val storage = DeviceStorage(context)
         val key = widgetKey(appWidgetId)
-        fun read() = WidgetView(storage.read<WidgetSelection>(key) ?: WidgetSelection(), storage.read<PhoneState>(PHONE_VIEW_KEY))
+        fun read() = WidgetView(storage.read<WidgetSelection>(key) ?: WidgetSelection(),
+            storage.read<PhoneState>(PHONE_VIEW_KEY), storage.read<TrendStyle>(TREND_STYLE_KEY) ?: TrendStyle.LINE)
         val heading = TextStyle(color = ColorProvider(Color(0xff132e27)), fontSize = 14.sp, fontWeight = WidgetWeight.Bold)
         val label = TextStyle(color = ColorProvider(Color(0xff395951)), fontSize = 11.sp)
         provideContent {
             val widget by produceState(read(), storage.preferences, key) {
                 val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, change ->
-                    if (change == key || change == PHONE_VIEW_KEY) value = read()
+                    if (change == key || change == PHONE_VIEW_KEY || change == TREND_STYLE_KEY) value = read()
                 }
                 storage.preferences.registerOnSharedPreferenceChangeListener(listener)
                 value = read()
@@ -96,7 +97,9 @@ class DashboardWidget : GlanceAppWidget() {
             val snapshot = widget.phone?.snapshot
             val stale = widget.phone?.usageError != null ||
                 snapshot?.let { it.stale || locallyStale(it.upstreamAt, it.freshnessMs) } == true
-            val chart = remember(snapshot, selection) { snapshot?.let { widgetChart(selection, it) } }
+            val chart = remember(snapshot, selection, widget.trendStyle) {
+                snapshot?.let { widgetChart(selection, it, widget.trendStyle) }
+            }
             val open = Intent(context, MainActivity::class.java).setData(Uri.parse("tmcomp://widget/$appWidgetId"))
                 .putExtra(WIDGET_PAYLOAD, wireJson.encodeToString(selection))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -127,7 +130,6 @@ class DashboardWidget : GlanceAppWidget() {
                     }
                     val scopeLabel = when (selection.card) {
                         OverviewCard.QUOTAS, OverviewCard.WALLETS -> "按账号采样"
-                        OverviewCard.TREND -> "近 7 天"
                         else -> selection.scope.range.label
                     }
                     WidgetText(scopeLabel + " · " + if (stale) "缓存" else displayClock(snapshot.upstreamAt),
@@ -143,23 +145,34 @@ class DashboardWidget : GlanceAppWidget() {
     }
 }
 
-private data class WidgetView(val selection: WidgetSelection, val phone: PhoneState?)
+private data class WidgetView(val selection: WidgetSelection, val phone: PhoneState?, val trendStyle: TrendStyle)
 
-private fun widgetChart(selection: WidgetSelection, data: Snapshot): Bitmap? {
+private fun widgetChart(selection: WidgetSelection, data: Snapshot, trendStyle: TrendStyle): Bitmap? {
     val bitmap = when (selection.card) {
         OverviewCard.TREND -> {
-            if (selection.scope.device != null) return null
-            val values = data.history.takeLast(7).map { it.tokens?.toFloat() }
-            val max = values.filterNotNull().maxOrNull()?.coerceAtLeast(1f) ?: return null
+            val series = data.trend(selection.scope)
+            val max = series.points.mapNotNull { it.tokens }.maxOrNull()?.coerceAtLeast(1L)?.toDouble() ?: return null
             Bitmap.createBitmap(250, 62, Bitmap.Config.ARGB_8888).also { target ->
                 val canvas = Canvas(target)
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff09634a.toInt(); strokeWidth = 3f }
+                fun y(value: Double) = 57f - (value / max).toFloat() * 51f
+                if (trendStyle == TrendStyle.CANDLE) {
+                    series.candles(false).forEach { candle ->
+                        val x = 5f + candle.position * 240f
+                        paint.color = (if (candle.close >= candle.open) 0xff09634a else 0xffad5348).toInt()
+                        canvas.drawLine(x, y(candle.high), x, y(candle.low), paint)
+                        val top = y(maxOf(candle.open, candle.close))
+                        canvas.drawRect(x - 3f, top, x + 3f, y(minOf(candle.open, candle.close)).coerceAtLeast(top + 1f), paint)
+                    }
+                    return@also
+                }
                 var prior: Pair<Float, Float>? = null
-                values.forEachIndexed { index, value ->
+                series.points.forEach { point ->
+                    val value = point.tokens
                     if (value == null) prior = null
                     else {
-                        val x = 5f + index * 240f / (values.size - 1).coerceAtLeast(1)
-                        val y = 57f - value / max * 51f
+                        val x = 5f + point.position * 240f
+                        val y = y(value.toDouble())
                         prior?.let { (px, py) ->
                             paint.color = 0x2809634a
                             canvas.drawPath(Path().apply {
@@ -232,7 +245,7 @@ class WidgetConfigurationActivity : ComponentActivity() {
                         FilterChip(selection.card == card, { selection = selection.copy(card = card) },
                             { Text(card.title) }, enabled = !busy)
                     }
-                    if (selection.card !in setOf(OverviewCard.WALLETS, OverviewCard.QUOTAS, OverviewCard.TREND)) {
+                    if (selection.card !in setOf(OverviewCard.WALLETS, OverviewCard.QUOTAS)) {
                         ScopePicker(snapshot, selection.scope, change = { selection = selection.copy(scope = it) })
                     }
                     if (error) Text("小工具更新失败，请重试。")

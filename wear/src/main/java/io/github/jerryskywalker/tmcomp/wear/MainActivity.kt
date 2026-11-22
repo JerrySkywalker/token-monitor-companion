@@ -13,10 +13,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Image
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -97,7 +99,13 @@ private fun WatchScreen() {
             contentPadding = PaddingValues(horizontal = 18.dp, vertical = 32.dp),
             autoCentering = null,
         ) {
-            item { Text("Token Monitor", style = MaterialTheme.typography.title3, textAlign = TextAlign.Center) }
+            item {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Image(painterResource(io.github.jerryskywalker.tmcomp.core.R.drawable.tmcomp_logo), null, Modifier.size(19.dp))
+                    Text("Token Monitor", style = MaterialTheme.typography.title3, textAlign = TextAlign.Center)
+                }
+            }
             item {
                 val label = when (config?.mode) {
                     null -> "等待绑定"

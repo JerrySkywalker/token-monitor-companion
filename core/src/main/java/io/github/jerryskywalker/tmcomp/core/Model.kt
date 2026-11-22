@@ -27,6 +27,12 @@ data class UsageEntry(val key: String, val label: String, val tokens: Long, val 
 data class TrendDay(val date: String, val tokens: Long? = null, val costUsd: Double? = null)
 
 @Serializable
+data class TrendCounter(val tokens: Long? = null, val costUsd: Double? = null)
+
+@Serializable
+data class TrendSample(val at: Long, val total: TrendCounter, val devices: Map<String, TrendCounter> = emptyMap())
+
+@Serializable
 data class Collector(
     val key: String,
     val label: String,
@@ -84,13 +90,15 @@ data class Snapshot(
     val history: List<TrendDay> = emptyList(),
     val collectors: List<Collector> = emptyList(),
     val toolSources: List<ToolSource> = emptyList(),
+    val trendSamples: List<TrendSample> = emptyList(),
+    val historyCheckedAt: String? = null,
 ) {
     fun forWatch(pin: String?): Snapshot {
         val sorted = readings.sortedWith(compareBy({ it.stale }, { it.remainingPercent ?: 101.0 }))
         fun summary(period: Period) = period.copy(tools = period.tools.take(12), models = period.models.take(8), toolModels = emptyMap())
         return copy(
             today = summary(today), month = summary(month), week = null, allTime = null,
-            history = history.takeLast(30), toolSources = emptyList(),
+            history = history.takeLast(30), toolSources = emptyList(), trendSamples = emptyList(), historyCheckedAt = null,
             collectors = collectors.take(12).map { it.copy(today = Period(it.today.tokens), month = Period(it.month.tokens), allTime = null) },
             readings = (listOfNotNull(readings.find { it.id == pin }) +
                 sorted.filter { it.kind == "quota" }.take(64) +

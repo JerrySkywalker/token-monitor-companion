@@ -21,6 +21,7 @@ import io.github.jerryskywalker.tmcomp.core.locallyStale
 import io.github.jerryskywalker.tmcomp.core.value
 
 internal const val QUOTA_LAYOUT_KEY = "quota_layout_v1"
+internal const val QUOTA_ORDER_KEY = "quota_order_v1"
 
 internal enum class QuotaLayout(val label: String) {
     STANDARD("标准"),
@@ -28,9 +29,15 @@ internal enum class QuotaLayout(val label: String) {
 }
 
 @Composable
-internal fun QuotaScreen(snapshot: Snapshot?, stale: Boolean, kind: String, layout: QuotaLayout, onKind: (String) -> Unit) {
+internal fun QuotaScreen(snapshot: Snapshot?, stale: Boolean, kind: String, layout: QuotaLayout, order: List<String>,
+    onOrder: () -> Unit, onKind: (String) -> Unit) {
     val typography = MaterialTheme.typography
-    Text("额度与余额", style = if (layout == QuotaLayout.COMPACT) typography.headlineSmall else typography.headlineMedium)
+    val accounts = snapshot.quotaOrder(kind, order)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("额度与余额", Modifier.weight(1f),
+            style = if (layout == QuotaLayout.COMPACT) typography.headlineSmall else typography.headlineMedium)
+        TextButton(onOrder, enabled = accounts.size > 1) { Text("调整顺序") }
+    }
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
         val tabs = listOf("quota" to "额度", "balance" to "余额", "spend" to "支出")
         tabs.forEachIndexed { index, (key, label) ->
@@ -45,13 +52,19 @@ internal fun QuotaScreen(snapshot: Snapshot?, stale: Boolean, kind: String, layo
         Text("等待首份额度快照")
         return
     }
-    val accounts = quotaAccounts(snapshot.readings, snapshot.toolSources).mapNotNull { it.forKind(kind) }
     if (accounts.isEmpty()) Text(when (kind) {
         "balance" -> "Hub 暂未上报钱包余额"
         "spend" -> "Hub 暂未上报按量支出"
         else -> "Hub 暂未上报额度"
     })
     accounts.forEach { QuotaAccountCard(it, snapshot.freshnessMs, stale, layout) }
+}
+
+internal fun Snapshot?.quotaOrder(kind: String, order: List<String>): List<QuotaAccount> {
+    if (this == null) return emptyList()
+    val index = order.withIndex().associate { it.value to it.index }
+    return quotaAccounts(readings, toolSources).mapNotNull { it.forKind(kind) }
+        .sortedBy { index[it.sortId] ?: Int.MAX_VALUE }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

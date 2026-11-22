@@ -9,7 +9,9 @@ internal data class QuotaAccount(
     val account: String?,
     val readings: List<Reading>,
     val source: ToolSource?,
-)
+) {
+    val sortId: String get() = "$providerId:" + (readings.firstOrNull()?.accountId ?: source?.accountId ?: account.orEmpty())
+}
 
 private data class AccountKey(val provider: String, val account: String?)
 

@@ -68,7 +68,8 @@ internal fun StopWatchDashboard(
         config?.paused == true || status.contains("失败") || status.contains("不可达")
     val ringKey = ringChoice ?: data.readings.firstOrNull { it.id == config?.pinnedId }?.toolKey
     val provider = data.readings.firstOrNull { it.toolKey == ringKey }?.provider ?: ringKey
-    val ring = data.readings.filter { it.kind == "quota" && it.toolKey == ringKey && it.shortWindow != cycle &&
+    val ringCategory = if (cycle) WatchQuotaCategory.CYCLE else WatchQuotaCategory.SHORT
+    val ring = data.readings.filter { it.toolKey == ringKey && it.watchQuotaCategory == ringCategory &&
         !cached && fresh(it, data.freshnessMs, now) }.mapNotNull { it.remainingPercent }.minOrNull()
     val cap = if (!ringKey.isNullOrEmpty()) (if (cycle) "周期 " else "短时 ") + provider + " " +
         (ring?.let { displayNumber(it) + "%" } ?: "—") else "Token Monitor"
@@ -100,17 +101,15 @@ internal fun StopWatchDashboard(
                         0 -> WatchOverview(data)
                         1 -> {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                                listOf("短时", "周期", "余额").forEachIndexed { i, name ->
-                                    Text(name, Modifier.clickable { quota = i; block = 0; if (i != 2) cycle = i == 1 }
+                                WatchQuotaCategory.entries.forEachIndexed { i, category ->
+                                    Text(category.label, Modifier.clickable { quota = i; block = 0; if (i != 2) cycle = i == 1 }
                                         .padding(3.dp), fontSize = 11.sp, color = if (quota == i) bright else muted)
                                 }
                             }
-                            val pages = data.readings.filter {
-                                if (quota == 2) it.kind == "balance" else it.kind == "quota" && it.shortWindow == (quota == 0)
-                            }.sortedWith(compareBy({ !fresh(it, data.freshnessMs, now) }, { it.remainingPercent ?: 101.0 })).chunked(4)
+                            val pages = watchQuotaGroups(data.readings, WatchQuotaCategory.entries[quota]).chunked(2)
                             if (pages.isEmpty()) Text("暂无读数", fontSize = 11.sp, color = muted)
                             val index = block.coerceAtMost((pages.size - 1).coerceAtLeast(0))
-                            pages.getOrNull(index)?.forEach { row -> WatchQuota(row, cached || !fresh(row, data.freshnessMs, now), now) }
+                            pages.getOrNull(index)?.forEach { group -> WatchProviderQuota(group, data.freshnessMs, cached, now) }
                             if (pages.size > 1) Text((index + 1).toString() + "/" + pages.size + " · 下一组",
                                 Modifier.clickable { block = (index + 1) % pages.size }.padding(4.dp), fontSize = 10.sp, color = muted)
                         }
@@ -171,13 +170,27 @@ private fun WatchOverview(data: Snapshot) {
 }
 
 @Composable
-private fun WatchQuota(row: Reading, stale: Boolean, now: Instant) {
-    Column(Modifier.fillMaxWidth().padding(bottom = 2.dp)
-        .background(panel, RoundedCornerShape(5.dp)).padding(horizontal = 4.dp)) {
-        WatchRow(row.provider + (row.account?.let { " · $it" } ?: ""),
+private fun WatchProviderQuota(group: WatchQuotaGroup, freshness: Long, cached: Boolean, now: Instant) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 3.dp)
+        .background(panel, RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 3.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(group.provider, color = hue(group.id), fontSize = 11.sp, lineHeight = 12.sp,
+            fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        group.accounts.forEachIndexed { index, account ->
+            val label = account.label ?: if (group.accounts.size > 1) "账号 ${index + 1}" else null
+            label?.let { Text(it, color = muted, fontSize = 9.sp, lineHeight = 10.sp, maxLines = 1) }
+            account.windows.forEach { row -> WatchQuotaWindow(row, cached || !fresh(row, freshness, now), now) }
+        }
+    }
+}
+
+@Composable
+private fun WatchQuotaWindow(row: Reading, stale: Boolean, now: Instant) {
+    Column(Modifier.fillMaxWidth()) {
+        WatchRow(row.label,
             if (row.kind == "balance" || row.unlimited) row.value()
             else row.remainingPercent?.let { displayNumber(it) + "%" } ?: "—", hue(row.toolKey))
-        Text(row.label + " · " + if (stale) "缓存" else countdown(row.boundaryAt, now),
+        Text(if (stale) "缓存" else countdown(row.boundaryAt, now),
             color = if (stale) warning else muted, fontSize = 9.sp, lineHeight = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Canvas(Modifier.fillMaxWidth().height(2.dp)) {
             drawRect(track)

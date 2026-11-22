@@ -41,20 +41,27 @@ fun hubConnection(address: String, secret: String, allowInsecure: Boolean): HubC
 }
 
 class Hub(private val connection: HubConnection) {
-    suspend fun snapshot(previous: Snapshot? = null): Snapshot = withContext(Dispatchers.IO) {
+    suspend fun snapshot(previous: Snapshot? = null, extendedTrends: Boolean = false): Snapshot = withContext(Dispatchers.IO) {
         val stats = request("/api/stats", 12_000, 16 * 1024 * 1024).useJson<HubStats>()
-        val hasHistory = stats.historyPreview?.daily.orEmpty().size >= 30
         val now = Instant.now()
-        val history = if (!hasHistory) {
+        val days = if (extendedTrends) 366 else 30
+        val due = previous?.historyCheckedAt?.let { runCatching { Instant.parse(it) }.getOrNull() }
+            ?.isAfter(now.minusSeconds(15 * 60)) != true
+        val fetchHistory = stats.historyPreview?.daily.orEmpty().size < days && (due || !extendedTrends)
+        val history = if (fetchHistory) {
             try {
-                request("/api/history", 4_000, 16 * 1024 * 1024).useJson<HubHistory>().takeIf { it.daily.isNotEmpty() }
+                request("/api/history", 4_000, 16 * 1024 * 1024).useJson<HubHistory>()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 null
             }
         } else null
-        projectHub(stats, history, now, previous?.history.orEmpty())
+        val next = projectHub(stats, history, now, previous?.history.orEmpty(), days)
+        if (extendedTrends) next.copy(
+            trendSamples = captureTrend(next, previous?.trendSamples.orEmpty(), now),
+            historyCheckedAt = if (fetchHistory) now.toString() else previous?.historyCheckedAt,
+        ) else next
     }
 
     private fun request(path: String, timeout: Int, maxBytes: Int): String {
@@ -86,4 +93,15 @@ class Hub(private val connection: HubConnection) {
 
     private inline fun <reified T> String.useJson(): T =
         runCatching { wireJson.decodeFromString<T>(this) }.getOrElse { throw IOException("无法读取 Hub 数据格式") }
+}
+
+private fun captureTrend(snapshot: Snapshot, previous: List<TrendSample>, now: Instant): List<TrendSample> {
+    val time = now.toEpochMilli()
+    val recent = previous.filter { it.at in (time - 27 * 60 * 60_000L) until time }
+    if (snapshot.stale || (snapshot.today.tokens == null && snapshot.today.costUsd == null)) return recent
+    // Retain at most one observation every five minutes, within the latest wall-clock day.
+    val slot = time / 300_000
+    val sample = TrendSample(time, TrendCounter(snapshot.today.tokens, snapshot.today.costUsd),
+        snapshot.collectors.filterNot { it.stale }.associate { it.key to TrendCounter(it.today.tokens, it.today.costUsd) })
+    return (recent.filter { it.at / 300_000 < slot } + sample).takeLast(325)
 }

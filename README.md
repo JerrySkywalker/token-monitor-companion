@@ -6,11 +6,19 @@
 
 在 [GitHub Releases](https://github.com/JerrySkywalker/token-monitor-companion/releases/latest) 下载适合设备的 APK。
 
-- **Android 11 或以上**。在手机安装 `token-monitor-companion-android-v0.1.0.apk`。
-- **Wear OS**。在手表安装 `token-monitor-companion-wear-os-v0.1.0.apk`，可使用 [Wear OS 无线调试](https://developer.android.com/training/wearables/get-started/debug-wifi) 侧载。
+- **Android 11 或以上**。在手机安装 `token-monitor-companion-android-v0.2.0.apk`。
+- **Wear OS**。在手表安装 `token-monitor-companion-wear-os-v0.2.0.apk`，可使用 [Wear OS 无线调试](https://developer.android.com/training/wearables/get-started/debug-wifi) 侧载。
 - 两端 Release APK 使用同一个应用 ID 和发布证书。若已装开发版，Android 会拒绝用不同证书覆盖安装。卸载开发版会清除其本地设置，之后可在 Release 版重新连接 Hub。
 
 下载的 `SHA256SUMS.txt` 可用于核对两个 APK 文件。
+
+## 总览、趋势和排序
+
+- 打开「设置 → 总览时间筛选」，从当日、7 天、30 天、365 天、本周、本月、本年中固定至多四项。总览的「更多时间」可临时选择其余范围。
+- 总览的 Tokens 趋势和「活动」页共用所选时间范围。在活动页选择折线或 K 线，可点图表查看该采样区间或日记录的数值，也可切换到预估成本。
+- 当日趋势从手机成功读取 Hub 时积累样本，显示相邻采样之间观察到的增量。Hub 的公开接口提供日历史，首次使用无法回填早先的日内曲线。长范围从 Hub 日历史绘制，缺失的日期留空。K 线从各分桶首、尾、最高和最低的已有读数生成。
+- 「编辑总览」可添加、移除和拖动展示队列里的卡片。「额度与余额 → 调整顺序」可分别拖动额度、余额与支出的账户卡片。排序和固定范围会保存在本机。
+- 手表额度按短时、周期和余额分区。每个区内同一工具只显示一次，再列出其不同账户和时间窗。
 
 ## 连接现有 Token Monitor Hub
 

@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.Image
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.Color
 import androidx.core.view.WindowCompat
@@ -20,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -81,13 +83,19 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
     var quotaLayout by remember {
         mutableStateOf(sync.storage.read<QuotaLayout>(QUOTA_LAYOUT_KEY) ?: QuotaLayout.STANDARD)
     }
-    var range by rememberSaveable { mutableStateOf(Range.TODAY.name) }
+    var pinnedRanges by remember {
+        mutableStateOf(sync.storage.read<List<Range>>(OVERVIEW_RANGES_KEY)
+            ?.filter { it in rangeChoices }?.distinct()?.take(4).orEmpty().ifEmpty { defaultRanges })
+    }
+    var range by rememberSaveable { mutableStateOf(pinnedRanges.first().name) }
     var collector by rememberSaveable { mutableStateOf<String?>(null) }
     var layout by remember { mutableStateOf(cards(context)) }
+    var quotaOrders by remember { mutableStateOf(sync.storage.read<Map<String, List<String>>>(QUOTA_ORDER_KEY).orEmpty()) }
+    var trendStyle by remember { mutableStateOf(sync.storage.read<TrendStyle>(TREND_STYLE_KEY) ?: TrendStyle.LINE) }
     val dashboardScope = DashboardScope(Range.valueOf(range), collector)
     val snapshot = state.snapshot
     val period = snapshot?.period(dashboardScope)
-    val stale = error != null || state.usageError != null || snapshot?.let { it.stale || locallyStale(it.upstreamAt, it.freshnessMs) } == true
+    val stale = state.usageError != null || snapshot?.let { it.stale || locallyStale(it.upstreamAt, it.freshnessMs) } == true
 
     fun setScope(value: DashboardScope) {
         range = value.range.name
@@ -171,9 +179,8 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
             hubReachable = true
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (failure: Exception) {
+        } catch (_: Exception) {
             hubReachable = false
-            throw failure
         }
     }
 
@@ -202,6 +209,7 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
     val inSettings = credentials != null && tab == 3
     val settingsTitle = if (inSettings) when (screen) {
         "editor" -> "编辑总览"
+        "overviewRanges" -> "总览时间筛选"
         "quotaLayout" -> "额度页布局"
         "wear", "watch" -> "Wear OS"
         "server" -> "Hub 详情"
@@ -229,6 +237,8 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     if (screen.isNotEmpty()) TextButton(::back) { Text("‹ 返回") }
+                    Image(painterResource(io.github.jerryskywalker.tmcomp.core.R.drawable.tmcomp_logo), null,
+                        Modifier.padding(end = 7.dp).size(29.dp))
                     Text("Token Monitor", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
                     if (credentials != null && screen.isEmpty() && tab == 0) {
                         TextButton(::checkConnection, enabled = !busy) { Text("刷新") }
@@ -249,13 +259,29 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
             } else {
                 when (screen) {
                     "editor" -> EditOverview(layout, { next ->
-                        sync.storage.write("overview_cards_v1", next)
+                        sync.storage.write(OVERVIEW_QUEUE_KEY, next)
                         layout = next
                         screen = ""
                     }, { screen = "" }, showTitle = settingsTitle == null)
+                    "overviewRanges" -> EditOverviewRanges(pinnedRanges, { next ->
+                        sync.storage.write(OVERVIEW_RANGES_KEY, next)
+                        if (dashboardScope.range !in next) range = next.first().name
+                        pinnedRanges = next
+                        screen = ""
+                    }, ::back)
+                    "quotaOrder" -> {
+                        Text("调整账户顺序", style = MaterialTheme.typography.headlineSmall)
+                        EditQuotaOrder(snapshot.quotaOrder(limitKind, quotaOrders[limitKind].orEmpty()),
+                            onSave = { ids ->
+                                val prior = quotaOrders[limitKind].orEmpty()
+                                quotaOrders = quotaOrders + (limitKind to (ids + prior).distinct())
+                                sync.storage.write(QUOTA_ORDER_KEY, quotaOrders)
+                                screen = ""
+                            }, onCancel = ::back)
+                    }
                     "tools" -> {
                         Text("我的工具", style = MaterialTheme.typography.headlineSmall)
-                        ScopePicker(snapshot, dashboardScope, ::setScope)
+                        ScopePicker(snapshot, dashboardScope, ::setScope, pinnedRanges)
                         snapshot?.let { data ->
                             tools(data, period).forEach { tool ->
                                 TextButton({ toolId = tool.id; screen = "tool" }) {
@@ -268,7 +294,7 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                         }
                     }
                     "tool" -> {
-                        ScopePicker(snapshot, dashboardScope, ::setScope)
+                        ScopePicker(snapshot, dashboardScope, ::setScope, pinnedRanges)
                         snapshot?.let { data ->
                             tools(data, period).firstOrNull { it.id == toolId }?.let {
                                 ToolDetail(it, period, data.freshnessMs, stale)
@@ -276,7 +302,7 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                         }
                     }
                     "composition" -> {
-                        ScopePicker(snapshot, dashboardScope, ::setScope)
+                        ScopePicker(snapshot, dashboardScope, ::setScope, pinnedRanges)
                         LedgerLine("Tokens", displayNumber(period?.tokens))
                         LedgerLine("预估成本", money(period?.costUsd))
                         LedgerLine("未计价 Tokens", displayNumber(period?.unpricedTokens))
@@ -348,32 +374,33 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                     }
                     else -> when (tab) {
                         0 -> {
-                            ScopePicker(snapshot, dashboardScope, ::setScope, header = {
+                            ScopePicker(snapshot, dashboardScope, ::setScope, pinnedRanges, header = {
                                 Column(Modifier.weight(1f)) {
                                     Text("总览", style = MaterialTheme.typography.headlineMedium)
-                                    Text((if (stale) "缓存 · " else "Hub · ") + displayClock(snapshot?.upstreamAt),
-                                        style = MaterialTheme.typography.labelMedium)
+                                    OverviewFreshness(snapshot, stale, state.usageError != null, busy)
                                 }
                             })
-                            state.usageError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                            if (snapshot == null) Text("等待首份用量数据") else {
-                                val visible = layout.filter { it.visible }
-                                if (visible.isEmpty()) Text("总览没有可见卡片。可从编辑总览添加。")
-                                visible.forEach { LedgerCard(OverviewCard.valueOf(it.id), snapshot, dashboardScope, ::showCard) }
+                            if (snapshot != null) {
+                                if (layout.isEmpty()) Text("总览没有可见卡片。可从编辑总览添加。")
+                                layout.forEach { LedgerCard(it, snapshot, dashboardScope, trendStyle, ::showCard) }
                             }
                         }
-                        1 -> QuotaScreen(snapshot, stale, limitKind, quotaLayout) { limitKind = it }
+                        1 -> QuotaScreen(snapshot, stale, limitKind, quotaLayout, quotaOrders[limitKind].orEmpty(),
+                            onOrder = { screen = "quotaOrder" }) { limitKind = it }
                         2 -> {
                             Text("活动", style = MaterialTheme.typography.headlineMedium)
-                            ScopePicker(snapshot, dashboardScope, ::setScope)
-                            var days by rememberSaveable { mutableIntStateOf(7) }
+                            ScopePicker(snapshot, dashboardScope, ::setScope, pinnedRanges)
                             var cost by rememberSaveable { mutableStateOf(false) }
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                FilterChip(days == 7, { days = 7 }, { Text("7 天") })
-                                FilterChip(days == 30, { days = 30 }, { Text("30 天") })
+                                TrendStyle.entries.forEach { style ->
+                                    FilterChip(trendStyle == style, {
+                                        trendStyle = style
+                                        sync.storage.write(TREND_STYLE_KEY, style)
+                                    }, { Text(style.label) })
+                                }
                                 FilterChip(cost, { cost = !cost }, { Text("预估成本") })
                             }
-                            TrendPlot(if (collector == null) snapshot?.history.orEmpty().takeLast(days) else emptyList(), cost)
+                            snapshot?.let { TrendPlot(it.trend(dashboardScope), trendStyle, cost) }
                             Text("工具分布", style = MaterialTheme.typography.titleMedium)
                             snapshot?.let { tools(it, period) }.orEmpty().forEach { tool ->
                                 LedgerLine(tool.label, displayNumber(tool.usage?.tokens),
@@ -383,6 +410,7 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                         else -> SettingsHome(credentials?.origin.orEmpty(), hubReachable, quotaLayout, state.watches.size,
                             onServer = { screen = "server" },
                             onOverview = { screen = "editor" },
+                            onRanges = { screen = "overviewRanges" },
                             onQuotaLayout = { screen = "quotaLayout" },
                             onWidget = {
                                 if (!requestOverviewWidget(context)) {
@@ -447,5 +475,21 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                     }
                 }) { Text("清除") }
             })
+    }
+}
+
+@Composable
+private fun OverviewFreshness(snapshot: Snapshot?, cached: Boolean, failed: Boolean, updating: Boolean) {
+    val warning = failed || cached
+    val label = when {
+        cached && snapshot != null -> "等待刷新 · 使用缓存"
+        failed -> "Hub 暂不可达 · 等待刷新"
+        snapshot == null || updating -> "等待数据刷新"
+        else -> "Hub · " + displayClock(snapshot.upstreamAt)
+    }
+    val color = if (warning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        if (warning) Icon(painterResource(R.drawable.status_warning), null, Modifier.size(14.dp), tint = color)
+        Text(label, color = color, style = MaterialTheme.typography.labelMedium)
     }
 }

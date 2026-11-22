@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -27,24 +26,41 @@ enum class OverviewCard(val title: String) {
 
 @Serializable
 data class CardOption(val id: String, val visible: Boolean = true)
-enum class Range(val label: String) { TODAY("今天"), WEEK("本周"), MONTH("本月"), TOTAL("累计") }
 
 @Serializable
 data class DashboardScope(val range: Range = Range.TODAY, val device: String? = null)
 
-internal fun defaultCards() = OverviewCard.entries.map { CardOption(it.name) }
-internal fun cards(context: Context): List<CardOption> {
-    val saved = DeviceStorage(context).read<List<CardOption>>("overview_cards_v1").orEmpty()
-    return (saved.filter { row -> OverviewCard.entries.any { it.name == row.id } } + defaultCards()).distinctBy { it.id }
+internal const val OVERVIEW_QUEUE_KEY = "overview_queue_v2"
+internal fun cards(context: Context): List<OverviewCard> {
+    val storage = DeviceStorage(context)
+    storage.read<List<OverviewCard>>(OVERVIEW_QUEUE_KEY)?.let { return it.distinct() }
+    val saved = storage.read<List<CardOption>>("overview_cards_v1").orEmpty()
+    return migrateOverviewCards(saved)
 }
+
+internal fun migrateOverviewCards(saved: List<CardOption>): List<OverviewCard> {
+    val known = OverviewCard.entries.associateBy { it.name }
+    return (saved + OverviewCard.entries.map { CardOption(it.name) }).distinctBy { it.id }
+        .filter { it.visible }.mapNotNull { known[it.id] }
+}
+
 internal fun Snapshot.period(scope: DashboardScope): Period? {
     val device = scope.device?.let { key -> collectors.firstOrNull { it.key == key } ?: return null }
     return when (scope.range) {
         Range.TODAY -> device?.today ?: today
-        Range.WEEK -> if (device == null) week else null
+        Range.WEEK -> if (device == null) week ?: observedPeriod(scope.range) else null
         Range.MONTH -> device?.month ?: month
         Range.TOTAL -> if (device == null) allTime else device.allTime
+        else -> if (device == null) observedPeriod(scope.range) else null
     }
+}
+
+private fun Snapshot.observedPeriod(range: Range): Period {
+    val days = daysFor(range)
+    return Period(
+        tokens = days.mapNotNull { it.tokens }.takeIf { it.isNotEmpty() }?.sum(),
+        costUsd = days.mapNotNull { it.costUsd }.takeIf { it.isNotEmpty() }?.sum(),
+    )
 }
 internal fun money(value: Double?) = value?.let { "USD " + displayNumber(it) } ?: "—"
 
@@ -94,8 +110,8 @@ internal fun cardLines(card: OverviewCard, snapshot: Snapshot, scope: DashboardS
     val period = snapshot.period(scope)
     return when (card) {
         OverviewCard.SUMMARY -> listOf("Tokens" to displayNumber(period?.tokens), "预估成本" to money(period?.costUsd))
-        OverviewCard.TREND -> if (scope.device != null) listOf("分设备历史" to "未上报") else
-            snapshot.history.takeLast(7).takeLast(3).map { it.date.takeLast(5) to displayNumber(it.tokens) }
+        OverviewCard.TREND -> snapshot.trend(scope).points.filter { it.tokens != null }.takeLast(3)
+            .map { it.label.takeLast(5) to displayNumber(it.tokens) }
         OverviewCard.COMPOSITION -> components(period).map { (label, value) -> label to displayNumber(value) }
         OverviewCard.TOOLS -> tools(snapshot, period).take(5).map { it.label to displayNumber(it.usage?.tokens) }
         OverviewCard.QUOTAS -> snapshot.readings.filter { it.kind == "quota" }.sortedBy { it.remainingPercent ?: 101.0 }.take(4)
@@ -107,9 +123,12 @@ internal fun cardLines(card: OverviewCard, snapshot: Snapshot, scope: DashboardS
 
 @Composable
 internal fun ScopePicker(snapshot: Snapshot?, value: DashboardScope, change: (DashboardScope) -> Unit,
+    pinnedRanges: List<Range> = defaultRanges,
     header: (@Composable RowScope.() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
+    var more by remember { mutableStateOf(false) }
+    val choices = pinnedRanges.filter { it in rangeChoices }.distinct().take(4).ifEmpty { defaultRanges }
     Column {
         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             if (header != null) header() else Spacer(Modifier.weight(1f))
@@ -125,49 +144,35 @@ internal fun ScopePicker(snapshot: Snapshot?, value: DashboardScope, change: (Da
             }
         }
         }
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            Range.entries.forEachIndexed { index, range ->
-                SegmentedButton(value.range == range, { change(value.copy(range = range)) },
-                    SegmentedButtonDefaults.itemShape(index, Range.entries.size),
-                    colors = SegmentedButtonDefaults.colors(activeContainerColor = MaterialTheme.colorScheme.primary,
-                        activeContentColor = MaterialTheme.colorScheme.onPrimary), icon = {},
-                ) { Text(range.label) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
+                choices.forEachIndexed { index, range ->
+                    SegmentedButton(value.range == range, { change(value.copy(range = range)) },
+                        SegmentedButtonDefaults.itemShape(index, choices.size),
+                        colors = SegmentedButtonDefaults.colors(activeContainerColor = MaterialTheme.colorScheme.primary,
+                            activeContentColor = MaterialTheme.colorScheme.onPrimary), icon = {},
+                    ) { Text(range.label, maxLines = 1) }
+                }
+            }
+            Box {
+                IconButton({ more = true }, modifier = Modifier.semantics { contentDescription = "更多时间" }) {
+                    Text("⋯", color = if (value.range in choices) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+                }
+                DropdownMenu(more, { more = false }) {
+                    (rangeChoices - choices.toSet()).forEach { range ->
+                        DropdownMenuItem(text = { Text(range.label) }, onClick = { change(value.copy(range = range)); more = false })
+                    }
+                }
             }
         }
+        if (value.range !in choices) Text("当前范围 · " + value.range.label, style = MaterialTheme.typography.labelMedium)
     }
 }
 
 @Composable
-internal fun EditOverview(current: List<CardOption>, onSave: (List<CardOption>) -> Unit, onCancel: () -> Unit,
-    showTitle: Boolean = true,
-) {
-    var draft by remember { mutableStateOf(current) }
-    if (showTitle) Text("编辑总览", style = MaterialTheme.typography.headlineSmall)
-    Text("选择卡片并调整顺序，保存后应用。")
-    for ((index, row) in draft.withIndex()) {
-        val name = OverviewCard.valueOf(row.id).title
-        fun move(next: Int) {
-            draft = draft.toMutableList().apply { add(next, removeAt(index)) }
-        }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text(name, Modifier.weight(1f))
-            TextButton({ move(index - 1) }, enabled = index > 0,
-                modifier = Modifier.semantics { contentDescription = "上移$name" }) { Text("↑") }
-            TextButton({ move(index + 1) }, enabled = index < draft.lastIndex,
-                modifier = Modifier.semantics { contentDescription = "下移$name" }) { Text("↓") }
-            Switch(row.visible, { visible -> draft = draft.map { if (it.id == row.id) it.copy(visible = visible) else it } },
-                modifier = Modifier.semantics { contentDescription = "显示$name" })
-        }
-    }
-    TextButton({ draft = defaultCards() }) { Text("恢复默认") }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onCancel) { Text("取消") }
-        Button({ onSave(draft) }) { Text("保存布局") }
-    }
-}
-
-@Composable
-internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: DashboardScope, detail: (OverviewCard, String?) -> Unit) {
+internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: DashboardScope,
+    trendStyle: TrendStyle, detail: (OverviewCard, String?) -> Unit) {
     val period = snapshot.period(scope)
     val lines = cardLines(card, snapshot, scope)
     Card(
@@ -184,15 +189,21 @@ internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: Dashboard
                 }
             }
             when (card) {
-                OverviewCard.SUMMARY -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    for ((label, value) in lines) Column(Modifier.weight(1f)) {
-                        val main = if (label == "Tokens") displayCompactTokens(period?.tokens) else value
-                        Text(main, Modifier.semantics { contentDescription = value }, fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.headlineSmall)
-                        Text(label, style = MaterialTheme.typography.labelMedium)
+                OverviewCard.SUMMARY -> {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        for ((label, value) in lines) Column(Modifier.weight(1f)) {
+                            val main = if (label == "Tokens") displayCompactTokens(period?.tokens) else value
+                            Text(main, Modifier.semantics { contentDescription = value }, fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.headlineSmall)
+                            Text(label, style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (scope.device == null && scope.range in listOf(Range.LAST_7, Range.LAST_30, Range.LAST_365, Range.YEAR)) {
+                        val days = snapshot.daysFor(scope.range)
+                        Text("已记录 ${days.count { it.tokens != null }}/${days.size} 天", style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                OverviewCard.TREND -> TrendPlot(if (scope.device == null) snapshot.history.takeLast(7) else emptyList())
+                OverviewCard.TREND -> TrendPlot(snapshot.trend(scope), trendStyle, compact = true)
                 OverviewCard.COMPOSITION -> {
                     val parts = components(period)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -229,46 +240,6 @@ internal fun LedgerLine(label: String, value: String, modifier: Modifier = Modif
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Text(value, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
     }
-}
-
-@Composable
-internal fun TrendPlot(days: List<TrendDay>, cost: Boolean = false) {
-    val values = days.map { if (cost) it.costUsd else it.tokens?.toDouble() }
-    val peak = values.filterNotNull().maxOrNull()?.coerceAtLeast(1.0)
-    if (peak == null) {
-        Text("趋势未上报", style = MaterialTheme.typography.bodySmall)
-        return
-    }
-    val green = MaterialTheme.colorScheme.primary
-    val grid = MaterialTheme.colorScheme.outlineVariant
-    Canvas(Modifier.fillMaxWidth().height(88.dp).semantics {
-        contentDescription = days.zip(values).joinToString("，") { (day, value) -> day.date + " " + displayNumber(value) }
-    }) {
-        repeat(4) { i ->
-            val y = size.height * i / 3
-            drawLine(grid, Offset(0f, y), Offset(size.width, y))
-        }
-        var previous: Offset? = null
-        values.forEachIndexed { i, value ->
-            val x = size.width * i / (values.size - 1).coerceAtLeast(1)
-            if (value == null) {
-                drawLine(grid, Offset(x - 3.dp.toPx(), size.height), Offset(x + 3.dp.toPx(), size.height), 2.dp.toPx())
-                previous = null
-            } else {
-                val point = Offset(x, size.height * (1f - (value / peak).toFloat()))
-                previous?.let { left ->
-                    drawPath(Path().apply {
-                        moveTo(left.x, size.height); lineTo(left.x, left.y); lineTo(point.x, point.y)
-                        lineTo(point.x, size.height); close()
-                    }, green.copy(alpha = .14f))
-                    drawLine(green, left, point, 2.dp.toPx())
-                }
-                drawCircle(green, 2.dp.toPx(), point)
-                previous = point
-            }
-        }
-    }
-    LedgerLine(days.first().date.takeLast(5), days.last().date.takeLast(5))
 }
 
 @Composable

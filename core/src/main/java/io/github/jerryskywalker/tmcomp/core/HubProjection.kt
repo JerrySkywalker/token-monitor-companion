@@ -57,7 +57,7 @@ internal data class HubDevice(
 internal data class HubLimits(val updatedAt: JsonElement? = null, val providers: List<JsonObject?> = emptyList())
 
 @Serializable
-internal data class HubHistory(val daily: List<JsonObject?> = emptyList())
+internal data class HubHistory(val daily: List<JsonObject?> = emptyList(), val dailyTotals: List<JsonObject?> = emptyList())
 
 private val providerLabels = mapOf(
     "codex" to "Codex", "claude" to "Claude", "cursor" to "Cursor", "gemini" to "Gemini",
@@ -107,17 +107,18 @@ private fun HubPeriod?.toPeriod(detailed: Boolean = true): Period {
         })
 }
 
-private fun historyRows(history: HubHistory?, previous: List<TrendDay>, today: LocalDate): Pair<List<TrendDay>, Map<LocalDate, JsonObject>> {
-    val observed = history?.daily.orEmpty().takeLast(400).mapNotNull { row ->
+private fun historyRows(history: List<JsonObject?>, previous: List<TrendDay>, today: LocalDate,
+    days: Int): Pair<List<TrendDay>, Map<LocalDate, JsonObject>> {
+    val observed = history.mapNotNull { row ->
         val date = row?.get("date").string()?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-        if (row != null && date != null && date in today.minusDays(32)..today.plusDays(1)) date to row else null
+        if (row != null && date != null && date in today.minusDays(days.toLong())..today.plusDays(1)) date to row else null
     }.toMap()
     val old = previous.filter { it.tokens != null || it.costUsd != null }.mapNotNull { row ->
         runCatching { LocalDate.parse(row.date) }.getOrNull()?.let { it to row }
     }.toMap()
     if (observed.isEmpty() && old.isEmpty()) return emptyList<TrendDay>() to observed
     val latest = maxOf(today, observed.keys.maxOrNull() ?: today)
-    val rows = (29 downTo 0).map { offset ->
+    val rows = (days - 1 downTo 0).map { offset ->
         val date = latest.minusDays(offset.toLong())
         val row = observed[date]
         if (row != null) TrendDay(date.toString(), row["tokens"].orElse(row["totalTokens"]).count(),
@@ -160,7 +161,8 @@ private fun calendarWeek(rows: List<TrendDay>, originals: Map<LocalDate, JsonObj
         summed("unpricedTokens"), parts(tokens, read, write, out, classified), read, write, out, classified, tools)
 }
 
-internal fun projectHub(stats: HubStats, fallback: HubHistory?, now: Instant, previous: List<TrendDay> = emptyList()): Snapshot {
+internal fun projectHub(stats: HubStats, fallback: HubHistory?, now: Instant, previous: List<TrendDay> = emptyList(),
+    historyDays: Int = 30): Snapshot {
     val upstream = stats.updatedAt.instant()
     val freshness = (stats.staleAfterMs.number() ?: 1_800_000.0).coerceIn(60_000.0, 604_800_000.0).toLong()
     val readings = mutableListOf<Reading>()
@@ -216,7 +218,9 @@ internal fun projectHub(stats: HubStats, fallback: HubHistory?, now: Instant, pr
                 source = window["source"].label() ?: source, windowKind = windowKind, windowMinutes = window["windowMinutes"].count())
         }
     }
-    val (history, originals) = historyRows(fallback ?: stats.historyPreview, previous, LocalDate.ofInstant(now, ZoneOffset.UTC))
+    val inputs = fallback?.dailyTotals.orEmpty().takeLast(400) +
+        fallback?.daily.orEmpty().takeLast(400) + stats.historyPreview?.daily.orEmpty().takeLast(400)
+    val (history, originals) = historyRows(inputs, previous, LocalDate.ofInstant(now, ZoneOffset.UTC), historyDays)
     val collectors = stats.devices.take(20).mapIndexedNotNull { index, device ->
         val id = device.deviceId.string()?.takeIf(String::isNotEmpty) ?: return@mapIndexedNotNull null
         val at = device.receivedAt.instant() ?: device.updatedAt.instant()
