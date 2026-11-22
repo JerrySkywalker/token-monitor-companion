@@ -32,6 +32,9 @@ internal fun SettingsHome(
     onServer: () -> Unit,
     onOverview: () -> Unit,
     onRanges: () -> Unit,
+    theme: AppTheme,
+    onTheme: (AppTheme) -> Unit,
+    onFavorites: () -> Unit,
     onQuotaLayout: () -> Unit,
     onWidget: () -> Unit,
     onWear: () -> Unit,
@@ -42,7 +45,11 @@ internal fun SettingsHome(
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SettingsHeading("显示与桌面")
             SettingsGroup {
+                ChoiceSetting("外观", theme, AppTheme.entries, { it.label }, onTheme)
+                SettingsDivider()
                 SettingRow("编辑总览", "展示队列和卡片顺序", R.drawable.settings_grid, onClick = onOverview)
+                SettingsDivider()
+                SettingRow("关注额度", "选择具体工具、账号和限制窗口", R.drawable.nav_quota, onClick = onFavorites)
                 SettingsDivider()
                 SettingRow("总览时间筛选", "最多固定 4 个常用范围", R.drawable.settings_grid, onClick = onRanges)
                 SettingsDivider()

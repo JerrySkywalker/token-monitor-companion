@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import io.github.jerryskywalker.tmcomp.core.Range
 
 internal data class ReorderEntry(val id: String, val title: String, val subtitle: String? = null)
 

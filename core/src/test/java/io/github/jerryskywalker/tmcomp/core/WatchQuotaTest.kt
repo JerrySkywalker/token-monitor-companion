@@ -21,6 +21,17 @@ class WatchQuotaTest {
         assertEquals(listOf("weekly", "monthly"), cycle.accounts.single().windows.map { it.id })
     }
 
+    @Test
+    fun categoryOrderAppliesOnlyToItsGroupsAndKeepsNewProviders() {
+        val cycleRows = listOf(quota("codex-weekly", "one", "每周", 10080),
+            quota("cursor-weekly", "two", "每周", 10080).copy(provider = "Cursor", providerId = "cursor"),
+            quota("agy-weekly", "three", "每周", 10080).copy(provider = "Antigravity", providerId = "antigravity"))
+        val rows = cycleRows + quota("codex-short", "one", "5 小时", 300)
+        val order = listOf("cursor", "missing", "codex")
+        assertEquals(listOf("cursor", "codex", "antigravity"), watchQuotaGroups(rows, WatchQuotaCategory.CYCLE, order).map { it.id })
+        assertEquals(listOf("codex"), watchQuotaGroups(rows, WatchQuotaCategory.SHORT).map { it.id })
+    }
+
     private fun quota(id: String, account: String, label: String, minutes: Long) =
         Reading(id, "Codex", label = label, kind = "quota", providerId = "codex", accountId = account, windowMinutes = minutes)
 }

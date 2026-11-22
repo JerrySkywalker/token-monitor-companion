@@ -11,6 +11,7 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 
 const val FROM_PHONE = "/tmcomp/v2/phone/"
+const val PHONE_TRENDS = FROM_PHONE + "trend/"
 const val FROM_WATCH = "/tmcomp/v2/watch/"
 const val SET_WATCH_HUB = "/tmcomp/v2/watch-hub"
 private const val PAYLOAD = "body"

@@ -80,6 +80,7 @@ internal fun WatchSettings(
     busy: Boolean,
     onChange: (WatchConfig) -> Unit,
     onHub: () -> Unit,
+    onDisplay: () -> Unit,
     onRemove: () -> Unit,
 ) {
     var pinOpen by remember(watch.id) { mutableStateOf(false) }
@@ -136,6 +137,8 @@ internal fun WatchSettings(
     SettingsGroup {
         SettingRow("手表 Hub 直连设置", summary = watch.report?.hubOrigin ?: "地址和 Secret",
             enabled = !busy, onClick = onHub)
+        SettingsDivider()
+        SettingRow("显示与实时预览", "额度顺序、趋势与 OLED", enabled = !busy, onClick = onDisplay)
         SettingsDivider()
         ListItem(headlineContent = { Text("暂停用量同步", fontWeight = FontWeight.Medium) },
             trailingContent = {

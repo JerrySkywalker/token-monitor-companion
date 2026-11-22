@@ -28,7 +28,7 @@ import kotlinx.coroutines.withContext
 
 private const val QR_PREFIX = "tmcomp:1:"
 private const val QR_LENGTH = 51
-private const val MAX_FRAME = 8192
+private const val MAX_FRAME = 32768
 private const val NONCE_BYTES = 12
 private const val KEY_BYTES = 32
 private const val TAG_BYTES = 16
@@ -96,7 +96,14 @@ class WatchPairingSession private constructor(
     private var closed = false
     private val expires = elapsedMillis() + LIFETIME_MS
 
-    suspend fun receive(applyHub: suspend (HubConnection) -> WatchHubResult): WatchHubResult = withContext(Dispatchers.IO) {
+    suspend fun receive(applyHub: suspend (HubConnection) -> WatchHubResult): WatchHubResult = receiveTransfer {
+        val origin = it.origin
+        val secret = it.secret
+        if (origin == null || secret == null) WatchHubResult(error = "配对码用于导入 Hub")
+        else applyHub(HubConnection(origin, secret))
+    }
+
+    suspend fun receiveTransfer(apply: suspend (WatchTransfer) -> WatchHubResult): WatchHubResult = withContext(Dispatchers.IO) {
         while (elapsedMillis() < expires) {
             currentCoroutineContext().ensureActive()
             val socket = try {
@@ -129,11 +136,11 @@ class WatchPairingSession private constructor(
                                 offset += count
                             }
                         }
-                        wireJson.decodeFromString<HubConnection>(channel.decrypt(frame, false).decodeToString())
+                        wireJson.decodeFromString<WatchTransfer>(channel.decrypt(frame, false).decodeToString())
                     }.getOrNull() ?: return@use
                     if (elapsedMillis() >= expires) throw IOException("配对码已过期，请重新打开")
                     server.close() // Consume the code before doing the Hub request.
-                    val result = applyHub(hub)
+                    val result = apply(hub)
                     // The Hub may already be saved if the phone disconnects before acknowledgement.
                     runCatching { output.writeFrame(channel.encrypt(wireJson.encodeToString(result).encodeToByteArray(), true)) }
                     return@withContext result
@@ -176,10 +183,16 @@ class WatchPairingSession private constructor(
 }
 
 suspend fun sendWatchHub(context: Context, code: WatchPairingCode, hub: HubConnection): WatchHubResult =
+    sendWatchTransfer(context, code, WatchTransfer(hub.origin, hub.secret))
+
+suspend fun sendWatchDisplay(context: Context, code: WatchPairingCode, display: WatchDisplay): WatchHubResult =
+    sendWatchTransfer(context, code, WatchTransfer(display = display))
+
+private suspend fun sendWatchTransfer(context: Context, code: WatchPairingCode, request: WatchTransfer): WatchHubResult =
     withContext(Dispatchers.IO) {
         val (network) = wifiNetwork(context)
         try {
-            exchangeWatchHub(network.socketFactory.createSocket(), code, hub)
+            exchangeWatchTransfer(network.socketFactory.createSocket(), code, request)
         } catch (_: java.net.ConnectException) {
             throw IOException("无法连接手表，请确认两端连接同一 Wi‑Fi 并重新扫码")
         } catch (_: SocketTimeoutException) {
@@ -187,14 +200,17 @@ suspend fun sendWatchHub(context: Context, code: WatchPairingCode, hub: HubConne
         }
     }
 
-internal fun exchangeWatchHub(socket: Socket, code: WatchPairingCode, hub: HubConnection): WatchHubResult = socket.use {
+internal fun exchangeWatchHub(socket: Socket, code: WatchPairingCode, hub: HubConnection): WatchHubResult =
+    exchangeWatchTransfer(socket, code, WatchTransfer(hub.origin, hub.secret))
+
+internal fun exchangeWatchTransfer(socket: Socket, code: WatchPairingCode, request: WatchTransfer): WatchHubResult = socket.use {
     it.connect(InetSocketAddress(code.address, code.port), 5_000)
     it.soTimeout = 40_000
     val input = DataInputStream(it.getInputStream())
     val output = DataOutputStream(it.getOutputStream())
     val challenge = ByteArray(CHALLENGE_BYTES).also { input.readFully(it) }
     val channel = PairingCipher(code.key, challenge)
-    output.writeFrame(channel.encrypt(wireJson.encodeToString(hub).encodeToByteArray(), false))
+    output.writeFrame(channel.encrypt(wireJson.encodeToString(request).encodeToByteArray(), false))
     runCatching {
         wireJson.decodeFromString<WatchHubResult>(channel.decrypt(input.readFrame(), true).decodeToString())
     }.getOrElse { throw IOException("未收到手表确认，请查看手表后重新扫码") }

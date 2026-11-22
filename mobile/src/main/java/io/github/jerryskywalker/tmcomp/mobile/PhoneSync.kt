@@ -129,7 +129,7 @@ class PhoneSync(context: Context) {
         val watch = WatchConfig(device.id, device.label, mode = initial?.mode ?: Mode.PHONE,
             pinnedId = initial?.pinnedId, paused = initial?.paused ?: false,
             refreshMinutes = initial?.refreshMinutes?.coerceIn(15, 1440) ?: 30,
-            ringProvider = initial?.ringProvider)
+            ringProvider = initial?.ringProvider, display = initial?.display ?: WatchDisplay())
         val connection = WatchLink(UUID.randomUUID().toString(), device.node)
         storage.write(LINK_PREFIX + device.id, connection)
         save(previous.copy(watches = previous.watches + watch,
@@ -180,9 +180,16 @@ class PhoneSync(context: Context) {
     }
 
     private suspend fun send(watch: WatchConfig, link: WatchLink, snapshot: Snapshot?, detached: Boolean = false) {
+        val usage = snapshot?.takeIf { !detached && watch.mode == Mode.PHONE && !watch.paused }
+        if (usage != null) {
+            val trends = WatchTrendPacket(link.binding, usage.retrievedAt, usage.history.takeLast(366),
+                usage.trendSamples.takeLast(325).map { it.copy(devices = emptyMap()) })
+            attempt { transport.send(PHONE_TRENDS + watch.id, wireJson.encodeToString(trends)) }
+        }
         val payload = PhonePacket(link.binding, storage.credentials()?.origin.orEmpty(), watch.copy(report = null),
-            snapshot?.takeIf { !detached && watch.mode == Mode.PHONE && !watch.paused }?.forWatch(watch.pinnedId), detached)
+            usage?.forWatch(watch.pinnedId), detached)
         transport.send(FROM_PHONE + watch.id, wireJson.encodeToString(payload))
+        if (detached) attempt { transport.removeOwned(PHONE_TRENDS + watch.id) }
     }
 
     companion object {

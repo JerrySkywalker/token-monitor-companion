@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.activity.ComponentActivity
@@ -23,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.glance.appwidget.updateAll
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import io.github.jerryskywalker.tmcomp.core.*
@@ -44,11 +46,21 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         launchSelection.value = widgetSelection(intent)
-        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
         setContent {
-            MaterialTheme(colorScheme = ledgerColors) {
+            val storage = remember { DeviceStorage(this) }
+            var theme by remember { mutableStateOf(storage.read<AppTheme>(THEME_KEY) ?: AppTheme.SYSTEM) }
+            val colors = theme.colors()
+            SideEffect {
+                val controller = WindowCompat.getInsetsController(window, window.decorView)
+                controller.isAppearanceLightStatusBars = colors.background.luminance() > .5f
+                controller.isAppearanceLightNavigationBars = colors.surface.luminance() > .5f
+            }
+            MaterialTheme(colorScheme = colors) {
                 val selection by launchSelection.collectAsState()
-                PhoneScreen(selection) { launchSelection.value = null }
+                PhoneScreen(selection, theme, { next ->
+                    storage.write(THEME_KEY, next)
+                    theme = next
+                }) { launchSelection.value = null }
             }
         }
     }
@@ -65,7 +77,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
+private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (AppTheme) -> Unit, consumed: () -> Unit) {
     val context = LocalContext.current
     val sync = remember { PhoneSync(context) }
     val scope = rememberCoroutineScope()
@@ -79,6 +91,7 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
     var toolId by rememberSaveable { mutableStateOf<String?>(null) }
     var watchId by rememberSaveable { mutableStateOf<String?>(null) }
     var watchHubParent by rememberSaveable { mutableStateOf("wear") }
+    var watchDisplayParent by rememberSaveable { mutableStateOf("wear") }
     var limitKind by rememberSaveable { mutableStateOf("quota") }
     var quotaLayout by remember {
         mutableStateOf(sync.storage.read<QuotaLayout>(QUOTA_LAYOUT_KEY) ?: QuotaLayout.STANDARD)
@@ -92,10 +105,26 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
     var layout by remember { mutableStateOf(cards(context)) }
     var quotaOrders by remember { mutableStateOf(sync.storage.read<Map<String, List<String>>>(QUOTA_ORDER_KEY).orEmpty()) }
     var trendStyle by remember { mutableStateOf(sync.storage.read<TrendStyle>(TREND_STYLE_KEY) ?: TrendStyle.LINE) }
+    var trendIntervals by remember { mutableStateOf(sync.storage.read<TrendIntervals>(TREND_INTERVAL_KEY) ?: TrendIntervals()) }
+    var favorites by remember { mutableStateOf(sync.storage.read<List<FavoriteQuota>>(FAVORITE_QUOTAS_KEY)) }
+    var watchPreset by remember { mutableStateOf(sync.storage.read<WatchDisplay>(WATCH_DISPLAY_PRESET_KEY) ?: WatchDisplay()) }
     val dashboardScope = DashboardScope(Range.valueOf(range), collector)
+    val interval = trendIntervals.forRange(dashboardScope.range)
     val snapshot = state.snapshot
     val period = snapshot?.period(dashboardScope)
     val stale = state.usageError != null || snapshot?.let { it.stale || locallyStale(it.upstreamAt, it.freshnessMs) } == true
+
+    fun refreshWidgets() {
+        scope.launch {
+            try {
+                DashboardWidget().updateAll(context)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // WorkManager will also update widgets after syncing fresh usage.
+            }
+        }
+    }
 
     fun setScope(value: DashboardScope) {
         range = value.range.name
@@ -125,6 +154,8 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
             "tool" -> "tools"
             "watch" -> "wear"
             "watchHub" -> watchHubParent
+            "watchDisplay" -> watchDisplayParent
+            "watchPreset" -> "wear"
             "hubEdit" -> "server"
             else -> ""
         }
@@ -133,6 +164,7 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
     var confirmRemove by remember { mutableStateOf<WatchConfig?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var watchCode by remember { mutableStateOf<WatchPairingCode?>(null) }
+    var scanDisplay by rememberSaveable { mutableStateOf(false) }
     var importedWatchHub by remember { mutableStateOf<String?>(null) }
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
         result.contents?.let { contents ->
@@ -142,11 +174,12 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
         }
     }
 
-    fun scanWatch() {
+    fun scanWatch(display: Boolean = false) {
         error = null
+        scanDisplay = display
         val options = ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             .setOrientationLocked(false).setBeepEnabled(false).setBarcodeImageEnabled(false)
-            .setPrompt("扫描手表「从手机导入 Hub」中的配对码")
+            .setPrompt(if (display) "扫描手表「从手机导入显示设置」中的配对码" else "扫描手表「从手机导入 Hub」中的配对码")
         try {
             scanner.launch(options)
         } catch (_: ActivityNotFoundException) {
@@ -203,15 +236,17 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
         }
     }
 
-    val tabs = listOf("总览", "额度", "活动", "设置")
-    val icons = listOf(R.drawable.nav_home, R.drawable.nav_quota, R.drawable.nav_activity, R.drawable.nav_settings)
+    val tabs = listOf("总览", "额度", "活动", "设备", "设置")
+    val icons = listOf(R.drawable.nav_home, R.drawable.nav_quota, R.drawable.nav_activity, R.drawable.settings_watch, R.drawable.nav_settings)
     val scroll = rememberScrollState()
-    val inSettings = credentials != null && tab == 3
+    val inSettings = credentials != null && tab == 4
     val settingsTitle = if (inSettings) when (screen) {
         "editor" -> "编辑总览"
         "overviewRanges" -> "总览时间筛选"
         "quotaLayout" -> "额度页布局"
+        "favorites" -> "关注额度"
         "wear", "watch" -> "Wear OS"
+        "watchDisplay", "watchPreset" -> "手表显示设置"
         "server" -> "Hub 详情"
         "hubEdit" -> "编辑手机 Hub"
         "watchHub" -> "手表 Hub 直连设置"
@@ -269,6 +304,12 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                         pinnedRanges = next
                         screen = ""
                     }, ::back)
+                    "favorites" -> EditFavoriteQuotas(snapshot, favorites) { next ->
+                        sync.storage.write(FAVORITE_QUOTAS_KEY, next)
+                        favorites = next
+                        refreshWidgets()
+                        screen = ""
+                    }
                     "quotaOrder" -> {
                         Text("调整账户顺序", style = MaterialTheme.typography.headlineSmall)
                         EditQuotaOrder(snapshot.quotaOrder(limitKind, quotaOrders[limitKind].orEmpty()),
@@ -340,9 +381,32 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                         }
                         TextButton(onClick = { screen = watchHubParent }, enabled = !busy) { Text("返回手表设置") }
                     }
+                    "watchDisplay" -> state.watches.firstOrNull { it.id == watchId }?.let { watch ->
+                        val rows = if (watch.mode == Mode.DIRECT) watch.report?.readings.orEmpty() else snapshot?.readings.orEmpty()
+                        WatchDisplayEditor(watch.display, rows, snapshot, busy, onSave = { next ->
+                            act {
+                                sync.edit(watch, watch.copy(display = next))
+                                screen = watchDisplayParent
+                            }
+                        })
+                    }
+                    "watchPreset" -> WatchDisplayEditor(watchPreset, snapshot?.readings.orEmpty(), snapshot, busy,
+                        onSave = { next ->
+                            sync.storage.write(WATCH_DISPLAY_PRESET_KEY, next)
+                            watchPreset = next
+                            screen = "wear"
+                        }, onScan = { next ->
+                            sync.storage.write(WATCH_DISPLAY_PRESET_KEY, next)
+                            watchPreset = next
+                            scanWatch(display = true)
+                        })
                     "wear", "watch" -> {
                         if (screen == "wear") {
-                            WearPairingEntry(busy, state.wearAvailable == false, onScan = ::scanWatch)
+                            WearPairingEntry(busy, state.wearAvailable == false, onScan = { scanWatch() })
+                            SettingsGroup {
+                                SettingRow("独立手表显示预设", "实时预览并扫码发送", R.drawable.settings_watch,
+                                    onClick = { screen = "watchPreset" })
+                            }
                         }
                         val watch = if (screen == "wear") state.watches.singleOrNull()
                             else state.watches.firstOrNull { it.id == watchId }
@@ -351,6 +415,7 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                             WatchSettings(it, it.id in state.connected, readings, busy,
                                 onChange = { next -> act { sync.edit(it, next) } },
                                 onHub = { watchHubParent = screen; watchId = it.id; screen = "watchHub" },
+                                onDisplay = { watchDisplayParent = screen; watchId = it.id; screen = "watchDisplay" },
                                 onRemove = { confirmRemove = it })
                         }
                         if (screen == "wear") {
@@ -382,7 +447,8 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                             })
                             if (snapshot != null) {
                                 if (layout.isEmpty()) Text("总览没有可见卡片。可从编辑总览添加。")
-                                layout.forEach { LedgerCard(it, snapshot, dashboardScope, trendStyle, ::showCard) }
+                                layout.forEach { LedgerCard(it, snapshot, dashboardScope, trendStyle, interval, favorites,
+                                    { screen = "favorites" }, ::showCard) }
                             }
                         }
                         1 -> QuotaScreen(snapshot, stale, limitKind, quotaLayout, quotaOrders[limitKind].orEmpty(),
@@ -396,21 +462,41 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                                     FilterChip(trendStyle == style, {
                                         trendStyle = style
                                         sync.storage.write(TREND_STYLE_KEY, style)
+                                        refreshWidgets()
                                     }, { Text(style.label) })
                                 }
                                 FilterChip(cost, { cost = !cost }, { Text("预估成本") })
                             }
-                            snapshot?.let { TrendPlot(it.trend(dashboardScope), trendStyle, cost) }
+                            SettingsGroup {
+                                ChoiceSetting("趋势显示间隔", interval, TrendInterval.forRange(dashboardScope.range), { it.label }) {
+                                    trendIntervals = trendIntervals.withRange(dashboardScope.range, it)
+                                    sync.storage.write(TREND_INTERVAL_KEY, trendIntervals)
+                                    refreshWidgets()
+                                }
+                            }
+                            snapshot?.let { TrendPlot(it.trend(dashboardScope, interval = interval), trendStyle, cost) }
                             Text("工具分布", style = MaterialTheme.typography.titleMedium)
                             snapshot?.let { tools(it, period) }.orEmpty().forEach { tool ->
                                 LedgerLine(tool.label, displayNumber(tool.usage?.tokens),
                                     Modifier.clickable { showCard(OverviewCard.TOOLS, tool.id) })
                             }
                         }
+                        3 -> DevicesTab(snapshot, onDevice = { device ->
+                            collector = device
+                            tab = 0
+                        }, onWear = {
+                            tab = 4
+                            screen = "wear"
+                        })
                         else -> SettingsHome(credentials?.origin.orEmpty(), hubReachable, quotaLayout, state.watches.size,
                             onServer = { screen = "server" },
                             onOverview = { screen = "editor" },
                             onRanges = { screen = "overviewRanges" },
+                            theme = theme, onTheme = {
+                                setTheme(it)
+                                refreshWidgets()
+                            },
+                            onFavorites = { screen = "favorites" },
                             onQuotaLayout = { screen = "quotaLayout" },
                             onWidget = {
                                 if (!requestOverviewWidget(context)) {
@@ -426,7 +512,23 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
         }
     }
     val hub = credentials
-    watchCode?.takeIf { hub != null }?.let { code ->
+    watchCode?.takeIf { scanDisplay || hub != null }?.let { code ->
+        if (scanDisplay) {
+            AlertDialog(onDismissRequest = { watchCode = null }, title = { Text("发送手表显示设置？") },
+                text = { Text("将额度顺序、趋势偏好和 OLED 设置发送到这块手表。") },
+                dismissButton = { TextButton({ watchCode = null }) { Text("取消") } },
+                confirmButton = {
+                    Button(enabled = !busy, onClick = {
+                        watchCode = null
+                        act {
+                            val reply = sendWatchDisplay(context, code, watchPreset)
+                            require(reply.displayApplied) { reply.error ?: "手表未确认显示设置" }
+                            Toast.makeText(context, "手表已应用显示设置", Toast.LENGTH_SHORT).show()
+                            screen = "wear"
+                        }
+                    }) { Text("发送显示设置") }
+                })
+        } else {
         AlertDialog(onDismissRequest = { watchCode = null }, title = { Text("发送 Hub 配置到手表？") },
             text = { Text("将手机保存的 Hub 地址和 Secret 发送到刚刚扫码的手表。手表验证后即可独立直连。\n\n" + hub?.origin.orEmpty()) },
             dismissButton = { TextButton({ watchCode = null }) { Text("取消") } },
@@ -441,6 +543,7 @@ private fun PhoneScreen(widget: WidgetSelection?, consumed: () -> Unit) {
                     }
                 }) { Text("发送 Hub 配置") }
             })
+        }
     }
     importedWatchHub?.let { address ->
         AlertDialog(onDismissRequest = { importedWatchHub = null }, title = { Text("手表已验证 Hub") },

@@ -14,10 +14,11 @@ val Reading.watchQuotaCategory: WatchQuotaCategory? get() = when {
 
 private data class QuotaWindowKey(val label: String, val kind: String?, val minutes: Long?, val currency: String?)
 
-fun watchQuotaGroups(rows: List<Reading>, category: WatchQuotaCategory): List<WatchQuotaGroup> {
+fun watchQuotaGroups(rows: List<Reading>, category: WatchQuotaCategory, order: List<String> = emptyList()): List<WatchQuotaGroup> {
     val matching = rows.filter { it.watchQuotaCategory == category }
         .sortedWith(compareBy<Reading>({ it.stale }, { it.remainingPercent ?: 101.0 }))
 
+    val ranks = order.withIndex().associate { it.value to it.index }
     return matching.groupBy { it.toolKey.lowercase() }.map { (providerId, readings) ->
         val accounts = readings.groupBy { it.accountId ?: it.account }.values.map { windows ->
             val recentFirst = windows.sortedWith(compareBy<Reading> { it.stale }.thenByDescending { it.observedAt })
@@ -27,5 +28,5 @@ fun watchQuotaGroups(rows: List<Reading>, category: WatchQuotaCategory): List<Wa
             WatchQuotaAccount(distinct.first().account, distinct)
         }
         WatchQuotaGroup(readings.first().provider, providerId, accounts)
-    }
+    }.sortedBy { ranks[it.id] ?: Int.MAX_VALUE }
 }

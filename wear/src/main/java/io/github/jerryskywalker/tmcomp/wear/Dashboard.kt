@@ -61,8 +61,8 @@ internal fun StopWatchDashboard(
     val pager = rememberPagerState { names.size }
     val action = rememberCoroutineScope()
     var quota by rememberSaveable { mutableIntStateOf(0) }
-    var block by rememberSaveable { mutableIntStateOf(0) }
     var cycle by rememberSaveable { mutableStateOf(false) }
+    val display = config?.display ?: WatchDisplay()
     val now = Instant.now()
     val cached = data.stale || locallyStale(data.upstreamAt, data.freshnessMs) ||
         config?.paused == true || status.contains("失败") || status.contains("不可达")
@@ -74,7 +74,7 @@ internal fun StopWatchDashboard(
     val cap = if (!ringKey.isNullOrEmpty()) (if (cycle) "周期 " else "短时 ") + provider + " " +
         (ring?.let { displayNumber(it) + "%" } ?: "—") else "Token Monitor"
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xff05070a))) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(if (display.oled) Color.Black else Color(0xff05070a))) {
         val w = maxWidth
         val h = maxHeight
         if (!ringKey.isNullOrEmpty()) Canvas(Modifier.fillMaxSize().padding(5.dp)) {
@@ -102,18 +102,16 @@ internal fun StopWatchDashboard(
                         1 -> {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                                 WatchQuotaCategory.entries.forEachIndexed { i, category ->
-                                    Text(category.label, Modifier.clickable { quota = i; block = 0; if (i != 2) cycle = i == 1 }
+                                    Text(category.label, Modifier.clickable { quota = i; if (i != 2) cycle = i == 1 }
                                         .padding(3.dp), fontSize = 11.sp, color = if (quota == i) bright else muted)
                                 }
                             }
-                            val pages = watchQuotaGroups(data.readings, WatchQuotaCategory.entries[quota]).chunked(2)
-                            if (pages.isEmpty()) Text("暂无读数", fontSize = 11.sp, color = muted)
-                            val index = block.coerceAtMost((pages.size - 1).coerceAtLeast(0))
-                            pages.getOrNull(index)?.forEach { group -> WatchProviderQuota(group, data.freshnessMs, cached, now) }
-                            if (pages.size > 1) Text((index + 1).toString() + "/" + pages.size + " · 下一组",
-                                Modifier.clickable { block = (index + 1) % pages.size }.padding(4.dp), fontSize = 10.sp, color = muted)
+                            val category = WatchQuotaCategory.entries[quota]
+                            val groups = watchQuotaGroups(data.readings, category, display.quotaOrders[category].orEmpty())
+                            if (groups.isEmpty()) Text("暂无读数", fontSize = 11.sp, color = muted)
+                            groups.forEach { group -> WatchProviderQuota(group, data.freshnessMs, cached, now, display.oled) }
                         }
-                        2 -> WatchTrend(data.history)
+                        2 -> WatchTrend(data, display.trend, if (config?.mode == Mode.DIRECT) config.refreshMinutes * 2 else 20)
                         3 -> {
                             if (data.collectors.isEmpty()) Text("暂无设备数据", fontSize = 11.sp, color = muted)
                             data.collectors.forEach { device ->
@@ -170,9 +168,9 @@ private fun WatchOverview(data: Snapshot) {
 }
 
 @Composable
-private fun WatchProviderQuota(group: WatchQuotaGroup, freshness: Long, cached: Boolean, now: Instant) {
+private fun WatchProviderQuota(group: WatchQuotaGroup, freshness: Long, cached: Boolean, now: Instant, oled: Boolean) {
     Column(Modifier.fillMaxWidth().padding(bottom = 3.dp)
-        .background(panel, RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 3.dp),
+        .background(if (oled) Color(0xff121212) else panel, RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 3.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(group.provider, color = hue(group.id), fontSize = 11.sp, lineHeight = 12.sp,
             fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -201,34 +199,65 @@ private fun WatchQuotaWindow(row: Reading, stale: Boolean, now: Instant) {
 }
 
 @Composable
-private fun WatchTrend(history: List<TrendDay>) {
-    var cost by rememberSaveable { mutableStateOf(false) }
-    var days by rememberSaveable { mutableIntStateOf(7) }
+private fun WatchTrend(data: Snapshot, defaults: WatchTrendSettings, maxGap: Long) {
+    val ranges = Range.entries.filter { it != Range.TOTAL }
+    var range by remember(defaults) { mutableStateOf(defaults.range.takeIf { it in ranges } ?: Range.LAST_7) }
+    var intervals by remember(defaults) { mutableStateOf(defaults.intervals) }
+    var style by remember(defaults) { mutableStateOf(defaults.style) }
+    var cost by remember(defaults) { mutableStateOf(defaults.cost) }
+    val choices = TrendInterval.forRange(range)
+    val interval = intervals.forRange(range)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text("$days 天 ↔", Modifier.clickable { days = if (days == 7) 30 else 7 }.padding(3.dp), fontSize = 11.sp, color = muted)
-        Text(if (cost) "预估成本 ↔" else "Tokens ↔",
-            Modifier.clickable { cost = !cost }.padding(3.dp), fontSize = 11.sp, color = muted)
+        Text(range.label + " ↔", Modifier.clickable { range = ranges[(ranges.indexOf(range) + 1) % ranges.size] }
+            .padding(3.dp).semantics { contentDescription = "趋势时间范围" }, fontSize = 10.sp, color = muted)
+        Text(interval.label + " ↔", Modifier.clickable { intervals = intervals.withRange(range, choices[(choices.indexOf(interval) + 1) % choices.size]) }
+            .padding(3.dp).semantics { contentDescription = "趋势显示间隔" }, fontSize = 10.sp, color = muted)
     }
-    val data = history.takeLast(days)
-    val values = data.map { if (cost) it.costUsd else it.tokens?.toDouble() }
-    val known = values.filterNotNull()
-    val maximum = known.maxOrNull()?.coerceAtLeast(1.0)
-    if (maximum == null) Text("趋势未上报", fontSize = 11.sp, color = muted)
-    else {
-        Text(if (cost) "USD " + displayNumber(known.sum()) else displayCompactTokens(known.sum().toLong()),
-            color = bright, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        Canvas(Modifier.fillMaxWidth().height(34.dp).semantics {
-            contentDescription = data.zip(values).joinToString("，") { (day, amount) -> day.date + " " + displayNumber(amount) }
-        }) {
-            val slot = size.width / values.size
-            values.forEachIndexed { i, value ->
-                val bar = value?.let { (size.height * it / maximum).toFloat().coerceAtLeast(1.dp.toPx()) } ?: 1.dp.toPx()
-                drawRect(if (value == null) warning else muted, Offset(i * slot, size.height - bar), Size(slot * .72f, bar))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(style.label + " ↔", Modifier.clickable { style = if (style == TrendStyle.LINE) TrendStyle.CANDLE else TrendStyle.LINE }
+            .padding(3.dp).semantics { contentDescription = "切换趋势图类型" }, fontSize = 10.sp, color = muted)
+        Text(if (cost) "USD ↔" else "Tokens ↔",
+            Modifier.clickable { cost = !cost }.padding(3.dp), fontSize = 10.sp, color = muted)
+    }
+    val series = remember(data, range, interval, maxGap) { data.trend(range, maxGapMinutes = maxGap.coerceIn(20, 120), interval = interval) }
+    val values = series.points.map { it.value(cost) }
+    val candles = if (style == TrendStyle.CANDLE) series.candles(cost) else emptyList()
+    val peak = (if (style == TrendStyle.CANDLE) candles.maxOfOrNull { it.high } else values.filterNotNull().maxOrNull())
+        ?.coerceAtLeast(1.0)
+    if (peak == null) {
+        Text(if (series.intraday) "等待连续采样" else "暂无趋势数据", fontSize = 10.sp, color = muted)
+        return
+    }
+    Canvas(Modifier.fillMaxWidth().height(43.dp).semantics {
+        contentDescription = style.label + " · " + range.label + " · " + interval.label
+    }) {
+        val pad = 2.dp.toPx()
+        fun x(at: Float) = pad + (size.width - 2 * pad) * at
+        fun y(value: Double) = pad + (size.height - 2 * pad) * (1 - (value / peak).toFloat())
+        drawLine(track, Offset(pad, size.height - pad), Offset(size.width - pad, size.height - pad))
+        if (style == TrendStyle.CANDLE) {
+            candles.forEach { candle ->
+                val cx = x(candle.position)
+                val color = if (candle.close >= candle.open) Color(0xff91d789) else warning
+                val top = y(maxOf(candle.open, candle.close))
+                val bottom = y(minOf(candle.open, candle.close))
+                val half = minOf(3.dp.toPx(), size.width * .022f)
+                drawLine(color, Offset(cx, y(candle.high)), Offset(cx, y(candle.low)), 1.dp.toPx())
+                drawRect(color, Offset(cx - half, top), Size(half * 2, (bottom - top).coerceAtLeast(1.dp.toPx())))
+            }
+        } else {
+            var previous: Offset? = null
+            series.points.zip(values).forEach { (point, value) ->
+                val next = value?.let { Offset(x(point.position), y(it)) }
+                if (next != null) {
+                    previous?.let { drawLine(bright, it, next, 1.dp.toPx()) }
+                    if (previous == null) drawCircle(bright, 1.dp.toPx(), next)
+                }
+                previous = next
             }
         }
-        WatchRow(data.first().date.takeLast(5), data.last().date.takeLast(5), muted)
-        Text("已观测 " + known.size + "/" + values.size + " 天", fontSize = 9.sp, color = muted)
     }
+    WatchRow(series.start.takeLast(5), series.end.takeLast(5), muted)
 }
 
 @Composable

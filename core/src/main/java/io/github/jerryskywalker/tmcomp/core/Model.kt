@@ -93,12 +93,14 @@ data class Snapshot(
     val trendSamples: List<TrendSample> = emptyList(),
     val historyCheckedAt: String? = null,
 ) {
-    fun forWatch(pin: String?): Snapshot {
+    fun forWatch(pin: String?, keepTrends: Boolean = false): Snapshot {
         val sorted = readings.sortedWith(compareBy({ it.stale }, { it.remainingPercent ?: 101.0 }))
         fun summary(period: Period) = period.copy(tools = period.tools.take(12), models = period.models.take(8), toolModels = emptyMap())
         return copy(
             today = summary(today), month = summary(month), week = null, allTime = null,
-            history = history.takeLast(30), toolSources = emptyList(), trendSamples = emptyList(), historyCheckedAt = null,
+            history = if (keepTrends) history else history.takeLast(30), toolSources = emptyList(),
+            trendSamples = if (keepTrends) trendSamples.map { it.copy(devices = emptyMap()) } else emptyList(),
+            historyCheckedAt = historyCheckedAt.takeIf { keepTrends },
             collectors = collectors.take(12).map { it.copy(today = Period(it.today.tokens), month = Period(it.month.tokens), allTime = null) },
             readings = (listOfNotNull(readings.find { it.id == pin }) +
                 sorted.filter { it.kind == "quota" }.take(64) +
@@ -137,6 +139,22 @@ data class WatchConfig(
     val refreshRequest: Int = 0,
     val report: Report? = null,
     val ringProvider: String? = null,
+    val display: WatchDisplay = WatchDisplay(),
+)
+
+@Serializable
+data class WatchDisplay(
+    val quotaOrders: Map<WatchQuotaCategory, List<String>> = emptyMap(),
+    val trend: WatchTrendSettings = WatchTrendSettings(),
+    val oled: Boolean = false,
+)
+
+@Serializable
+data class WatchTrendPacket(
+    val binding: String,
+    val retrievedAt: String,
+    val history: List<TrendDay>,
+    val samples: List<TrendSample>,
 )
 
 @Serializable
@@ -161,4 +179,7 @@ data class WatchPacket(
 data class WatchHubSetup(val id: String, val binding: String, val hub: HubConnection)
 
 @Serializable
-data class WatchHubResult(val origin: String? = null, val error: String? = null)
+class WatchTransfer(val origin: String? = null, val secret: String? = null, val display: WatchDisplay? = null)
+
+@Serializable
+data class WatchHubResult(val origin: String? = null, val error: String? = null, val displayApplied: Boolean = false)

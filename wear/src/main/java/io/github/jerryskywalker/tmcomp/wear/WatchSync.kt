@@ -90,7 +90,8 @@ class WatchSync(context: Context) {
             else -> {
                 schedule(config.refreshMinutes)
                 try {
-                    val snapshot = Hub(credentials).snapshot(current.snapshot).forWatch(config.pinnedId)
+                    val snapshot = Hub(credentials).snapshot(current.snapshot, extendedTrends = true)
+                        .forWatch(config.pinnedId, keepTrends = true)
                     save(current.copy(snapshot = snapshot, error = null))
                     publishStatus(WatchStatus.READY, force)
                 } catch (cancelled: CancellationException) {
@@ -106,7 +107,8 @@ class WatchSync(context: Context) {
     private suspend fun acceptPhoneData() {
         if (view().localOnly) return
         val previous = link()
-        val packet = checked { transport.items(FROM_PHONE) }.orEmpty().asSequence()
+        val inbox = checked { transport.items(FROM_PHONE) }.orEmpty()
+        val packet = inbox.asSequence()
             .filter { it.path == FROM_PHONE + id && (previous == null || it.node == previous.node) }
             .mapNotNull { item ->
                 val value = runCatching { wireJson.decodeFromString<PhonePacket>(item.body) }.getOrNull()
@@ -133,7 +135,22 @@ class WatchSync(context: Context) {
             config.mode == Mode.PHONE && !config.paused &&
                 (retained == null || newerThanOrEqual(it.retrievedAt, retained.retrievedAt))
         }
-        save(current.copy(config = config, snapshot = provided ?: retained, phoneOrigin = value.origin,
+        val base = provided ?: retained
+        val trends = if (base != null && config.mode == Mode.PHONE && !config.paused) inbox
+            .firstOrNull { it.node == node && it.path == PHONE_TRENDS + id }
+            ?.let { runCatching { wireJson.decodeFromString<WatchTrendPacket>(it.body) }.getOrNull() }
+            ?.takeIf { it.binding == value.binding && it.retrievedAt == base.retrievedAt } else null
+        val snapshot = when {
+            base != null && trends != null -> base.copy(
+                history = trends.history.takeLast(366), trendSamples = trends.samples.takeLast(325))
+            provided != null && retained != null -> {
+                // Data Layer can deliver the usage and trend items in separate callbacks.
+                val history = (retained.history + provided.history).associateBy { it.date }
+                provided.copy(history = history.values.sortedBy { it.date }.takeLast(366), trendSamples = retained.trendSamples)
+            }
+            else -> base
+        }
+        save(current.copy(config = config, snapshot = snapshot, phoneOrigin = value.origin,
             error = current.error.takeIf { config.mode == Mode.DIRECT && modeMatches }))
     }
 
@@ -169,13 +186,24 @@ class WatchSync(context: Context) {
         tickLocked(force = true)
     }
 
+    suspend fun configureLocalDisplay(display: WatchDisplay) = mutex.withLock {
+        val current = view()
+        val config = requireNotNull(current.config) { "请先配置 Hub" }
+        require(link() == null || current.localOnly) { "请在手机已绑定手表的设置中保存" }
+        val clean = display.copy(quotaOrders = display.quotaOrders.mapValues { (_, ids) ->
+            ids.distinct().take(80).filter { it.length <= 100 }
+        })
+        save(current.copy(config = config.copy(display = clean)))
+    }
+
     private suspend fun saveHub(hub: HubConnection, current: WatchView, config: WatchConfig) {
-        val snapshot = Hub(hub).snapshot(
-            current.snapshot.takeIf { config.mode == Mode.DIRECT && storage.credentials()?.origin == hub.origin }
-        )
+        val oldHub = storage.credentials()
+        val snapshot = Hub(hub).snapshot(current.snapshot.takeIf {
+            config.mode == Mode.DIRECT && oldHub?.origin == hub.origin && oldHub.secret == hub.secret
+        }, extendedTrends = true)
         storage.saveCredentials(hub)
         val direct = config.mode == Mode.DIRECT
-        save(current.copy(config = config, snapshot = if (direct) snapshot.forWatch(config.pinnedId) else current.snapshot,
+        save(current.copy(config = config, snapshot = if (direct) snapshot.forWatch(config.pinnedId, keepTrends = true) else current.snapshot,
             error = null))
         if (direct && !config.paused) schedule(config.refreshMinutes)
         val status = when {

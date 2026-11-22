@@ -19,6 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -48,7 +51,8 @@ private fun WatchScreen() {
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var connection by rememberSaveable { mutableStateOf(false) }
-    var importing by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf<Boolean?>(null) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     fun action(block: suspend () -> Unit) {
         if (busy) return
@@ -68,11 +72,18 @@ private fun WatchScreen() {
         }
     }
 
-    LaunchedEffect(Unit) {
-        action { sync.tick() }
-        while (true) {
-            delay(1_500)
-            if (!busy) view = sync.view()
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            action { sync.tick() }
+            var elapsed = 0
+            while (true) {
+                delay(1_500)
+                if (!busy) view = sync.view()
+                if (++elapsed >= 200) {
+                    elapsed = 0
+                    if (view.config?.mode == Mode.DIRECT && view.config?.paused == false) action { sync.tick() }
+                }
+            }
         }
     }
 
@@ -137,8 +148,14 @@ private fun WatchScreen() {
                 item { Chip(onClick = { connection = false }, label = { Text("返回看板") }, modifier = Modifier.fillMaxWidth()) }
             }
             item {
-                Chip(onClick = { importing = true }, label = { Text("从手机导入 Hub") },
+                Chip(onClick = { importing = false }, label = { Text("从手机导入 Hub") },
                     enabled = !busy, modifier = Modifier.fillMaxWidth())
+            }
+            if (config != null && (view.localOnly || sync.link() == null)) {
+                item {
+                    Chip(onClick = { importing = true }, label = { Text("从手机导入显示设置") },
+                        enabled = !busy, modifier = Modifier.fillMaxWidth())
+                }
             }
             if (config == null || config.mode == Mode.DIRECT) {
                 item {
@@ -190,9 +207,9 @@ private fun WatchScreen() {
             }
         }
     }
-    if (importing) {
-        WatchImportHub(sync, onDismiss = { importing = false }) {
-            importing = false
+    importing?.let { displayOnly ->
+        WatchImportHub(sync, displayOnly, onDismiss = { importing = null }) {
+            importing = null
             view = sync.view()
             connection = false
             error = null

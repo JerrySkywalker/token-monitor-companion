@@ -62,6 +62,36 @@ class DashboardTrendsTest {
         assertTrue(OverviewCard.SUMMARY in cards)
     }
 
+    @Test
+    fun intervalIsIndependentOfDateRangeAndPreservesIncompleteBuckets() {
+        val data = snapshot(samples = listOf(sample("2026-03-01T00:02:00Z", 100, null),
+            sample("2026-03-01T00:07:00Z", 105, null), sample("2026-03-01T00:12:00Z", 108, null),
+            sample("2026-03-01T00:39:00Z", 114, null)))
+        val prefs = TrendIntervals().withRange(Range.TODAY, TrendInterval.MIN_15)
+            .withRange(Range.LAST_30, TrendInterval.DAYS_7)
+        val series = data.trend(DashboardScope(), day, ZoneOffset.UTC, prefs.forRange(Range.TODAY))
+        assertEquals(listOf(8L, null), series.points.map { it.tokens })
+        assertEquals(TrendInterval.DAYS_7, prefs.forRange(Range.LAST_365))
+        assertEquals(5.0, series.candles(false).single().open, 0.0)
+        assertEquals(3.0, series.candles(false).single().close, 0.0)
+        val history = snapshot(listOf(TrendDay("2026-02-28", 10), TrendDay("2026-03-01", 13)))
+        val daily = history.trend(DashboardScope(Range.LAST_7), day, interval = TrendInterval.DAY)
+        assertEquals(listOf(10.0, 13.0), daily.candles(false).map { it.close })
+    }
+
+    @Test
+    fun favoritesSelectAnExactAccountWindowAndKeepUnavailableSelection() {
+        val readings = listOf(
+            Reading("five", "Codex", "Personal", "5-hour", "quota", remainingPercent = 60.0),
+            Reading("week", "Codex", "Personal", "Weekly", "quota", remainingPercent = 20.0),
+        )
+        val data = snapshot().copy(readings = readings)
+        val visible = data.favoriteLines(listOf(FavoriteQuota("five", "old label"), FavoriteQuota("missing", "temporarily missing")))
+        assertEquals(listOf(readings[0].title(), "temporarily missing"), visible.map { it.first })
+        assertEquals("暂未上报", visible.last().second)
+        assertTrue(data.favoriteLines(emptyList()).isEmpty())
+    }
+
     private fun sample(at: String, total: Long, device: Long?) =
         TrendSample(Instant.parse(at).toEpochMilli(), TrendCounter(total), device?.let { mapOf("device" to TrendCounter(it)) }.orEmpty())
 

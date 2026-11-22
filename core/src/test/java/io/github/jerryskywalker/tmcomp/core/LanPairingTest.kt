@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -66,5 +68,34 @@ class LanPairingTest {
             assertEquals(credentials.origin, watch.await().origin)
             phone.await()
         }
+    }
+
+    @Test
+    fun transfersDisplaySettingsWithoutSendingHubCredentials() = runBlocking<Unit> {
+        val display = WatchDisplay(
+            quotaOrders = mapOf(WatchQuotaCategory.CYCLE to listOf("cursor", "codex")),
+            trend = WatchTrendSettings(Range.LAST_30, TrendIntervals(daily = TrendInterval.DAYS_7), TrendStyle.CANDLE),
+            oled = true,
+        )
+        val address = InetAddress.getByName("127.0.0.1") as Inet4Address
+        WatchPairingSession.open(address).use { session ->
+            val watch = async {
+                session.receiveTransfer {
+                    assertNull(it.origin)
+                    assertNull(it.secret)
+                    assertEquals(display, it.display)
+                    WatchHubResult(displayApplied = true)
+                }
+            }
+            val phone = async(Dispatchers.IO) {
+                exchangeWatchTransfer(Socket(), session.code, WatchTransfer(display = display))
+            }
+            assertTrue(phone.await().displayApplied)
+            assertTrue(watch.await().displayApplied)
+        }
+        val previous = HubConnection("https://hub.example", "fixture-secret")
+        val decoded = wireJson.decodeFromString<WatchTransfer>(wireJson.encodeToString(previous))
+        assertEquals(previous.origin, decoded.origin)
+        assertNull(decoded.display)
     }
 }

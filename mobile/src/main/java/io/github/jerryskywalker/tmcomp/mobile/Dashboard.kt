@@ -106,16 +106,16 @@ internal fun components(period: Period?) = listOf(
     "缓存写入" to period?.cacheWrite, "输出" to period?.output, "未分类" to period?.unclassified,
 )
 
-internal fun cardLines(card: OverviewCard, snapshot: Snapshot, scope: DashboardScope): List<Pair<String, String>> {
+internal fun cardLines(card: OverviewCard, snapshot: Snapshot, scope: DashboardScope,
+    favorites: List<FavoriteQuota>? = null, interval: TrendInterval = TrendInterval.NATIVE): List<Pair<String, String>> {
     val period = snapshot.period(scope)
     return when (card) {
         OverviewCard.SUMMARY -> listOf("Tokens" to displayNumber(period?.tokens), "预估成本" to money(period?.costUsd))
-        OverviewCard.TREND -> snapshot.trend(scope).points.filter { it.tokens != null }.takeLast(3)
+        OverviewCard.TREND -> snapshot.trend(scope, interval = interval).points.filter { it.tokens != null }.takeLast(3)
             .map { it.label.takeLast(5) to displayNumber(it.tokens) }
         OverviewCard.COMPOSITION -> components(period).map { (label, value) -> label to displayNumber(value) }
         OverviewCard.TOOLS -> tools(snapshot, period).take(5).map { it.label to displayNumber(it.usage?.tokens) }
-        OverviewCard.QUOTAS -> snapshot.readings.filter { it.kind == "quota" }.sortedBy { it.remainingPercent ?: 101.0 }.take(4)
-            .map { it.title() to if (it.stale) it.value() + " · 缓存" else it.value() }
+        OverviewCard.QUOTAS -> snapshot.favoriteLines(favorites)
         OverviewCard.WALLETS -> snapshot.readings.filter { it.kind == "balance" }.take(4)
             .map { it.title() to if (it.stale) it.value() + " · 缓存" else it.value() }
     }
@@ -172,9 +172,10 @@ internal fun ScopePicker(snapshot: Snapshot?, value: DashboardScope, change: (Da
 
 @Composable
 internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: DashboardScope,
-    trendStyle: TrendStyle, detail: (OverviewCard, String?) -> Unit) {
+    trendStyle: TrendStyle, interval: TrendInterval, favorites: List<FavoriteQuota>?,
+    editFavorites: () -> Unit, detail: (OverviewCard, String?) -> Unit) {
     val period = snapshot.period(scope)
-    val lines = cardLines(card, snapshot, scope)
+    val lines = cardLines(card, snapshot, scope, favorites, interval)
     Card(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = if (card == OverviewCard.SUMMARY)
@@ -184,6 +185,7 @@ internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: Dashboard
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text(card.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                if (card == OverviewCard.QUOTAS) TextButton(editFavorites) { Text("选择条目") }
                 TextButton({ detail(card, null) }) {
                     Text(if (card == OverviewCard.TOOLS) "全部工具 ›" else "明细 ›")
                 }
@@ -203,7 +205,7 @@ internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: Dashboard
                         Text("已记录 ${days.count { it.tokens != null }}/${days.size} 天", style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                OverviewCard.TREND -> TrendPlot(snapshot.trend(scope), trendStyle, compact = true)
+                OverviewCard.TREND -> TrendPlot(snapshot.trend(scope, interval = interval), trendStyle, compact = true)
                 OverviewCard.COMPOSITION -> {
                     val parts = components(period)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),

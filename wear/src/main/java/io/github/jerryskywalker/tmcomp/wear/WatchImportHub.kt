@@ -42,7 +42,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun WatchImportHub(sync: WatchSync, onDismiss: () -> Unit, onComplete: () -> Unit) {
+internal fun WatchImportHub(sync: WatchSync, displayOnly: Boolean, onDismiss: () -> Unit, onComplete: () -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val dismiss by rememberUpdatedState(onDismiss)
@@ -74,21 +74,30 @@ internal fun WatchImportHub(sync: WatchSync, onDismiss: () -> Unit, onComplete: 
             }
             session = listener
             code = withContext(Dispatchers.Default) { pairingQr(listener.code.encode()) }
-            val result = listener.receive { incoming ->
+            val result = listener.receiveTransfer { incoming ->
                 withContext(Dispatchers.Main) { checking = true; code = null }
                 try {
-                    val hub = hubConnection(incoming.origin, incoming.secret, BuildConfig.DEBUG)
-                    sync.configureLocalHub(hub, fromPhoneQr = true)
-                    WatchHubResult(origin = hub.origin)
+                    if (displayOnly) {
+                        require(incoming.origin == null && incoming.secret == null) { "此配对码用于显示设置" }
+                        sync.configureLocalDisplay(requireNotNull(incoming.display) { "手机未发送显示设置" })
+                        WatchHubResult(displayApplied = true)
+                    } else {
+                        val hub = hubConnection(requireNotNull(incoming.origin) { "此配对码用于 Hub" },
+                            requireNotNull(incoming.secret) { "手机未发送 Hub Secret" }, BuildConfig.DEBUG)
+                        sync.configureLocalHub(hub, fromPhoneQr = true)
+                        WatchHubResult(origin = hub.origin)
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: HubException) {
+                    WatchHubResult(error = failure.message)
+                } catch (failure: IllegalArgumentException) {
                     WatchHubResult(error = failure.message)
                 } catch (_: Exception) {
                     WatchHubResult(error = "手表无法连接该 Hub，请检查手表网络与 Hub 设置")
                 }
             }
-            if (result.origin != null) complete() else error = result.error
+            if (result.origin != null || result.displayApplied) complete() else error = result.error
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -120,7 +129,12 @@ internal fun WatchImportHub(sync: WatchSync, onDismiss: () -> Unit, onComplete: 
                 Image(image, contentDescription = "一次性手表配对码", modifier = Modifier.size(132.dp))
                 Text("同一 Wi‑Fi · 2 分钟有效", style = MaterialTheme.typography.caption2)
             } else {
-                Text(error ?: if (checking) "正在验证 Hub" else "正在生成配对码",
+                val status = when {
+                    !checking -> "正在生成配对码"
+                    displayOnly -> "正在应用显示设置"
+                    else -> "正在验证 Hub"
+                }
+                Text(error ?: status,
                     modifier = Modifier.size(width = 132.dp, height = 58.dp), textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.caption1)
                 if (error != null) Chip(onClick = dismiss, label = { Text("关闭") })
