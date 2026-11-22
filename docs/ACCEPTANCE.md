@@ -12,7 +12,13 @@
 | 手表独立直连 | Wear AVD 手输一次性码后显示 Codex 41% 和 OpenRouter USD 12.34，关闭手机 AVD 后表上刷新取得较新的快照 |
 | 手机控制直连表 | 手机暂停后收到了 v1 已暂停回执。恢复同步并置顶 OpenRouter 后，手表调整显示顺序，手机收到了 v3 已同步回执。手机发起刷新后收到了 v4 已同步回执 |
 | 断网与恢复 | Wear AVD 开启飞行模式后保留上次余额并显示连接失败。恢复网络并重新打开应用后刷新成功 |
-| Wear OS Data Layer | 手机 AVD 已从 Google Play 安装 Google Pixel Watch 5.1。系统配对停在 Wear OS 服务条款，待在手机 AVD 确认后验证发现、转发、回执和模式切换 |
+| Wear OS 系统配对 | 手机 AVD 安装 Google Pixel Watch 5.1 后完成系统配对。ADB 在手机 `emulator-5570` 和手表 `emulator-5572` 上均返回对方已连接 |
+| Data Layer 设备发现 | 手机应用发现 `sdk_gwear_x86_64`，绑定后显示「手机连接在线」 |
+| Data Layer 用量转发 | 切到「手机同步 · v5」后，手表显示 Codex 周额度剩余 41% 和 OpenRouter 余额 12.34 USD |
+| Data Layer 手表回执 | 保持手机同步模式，只在手机发起刷新。手表更新快照并返回 `PHONE v6 READY`，手机显示「状态 · 已同步 · v6」 |
+| 双向模式切换 | `DIRECT v4 → PHONE v5 → DIRECT v7` 通过。切回独立直连时复用此前的手表授权，手表读取新快照并返回 `DIRECT v7 READY` |
 | 真机 | eSIM 和厂商后台运行待在后续真机环境测量 |
+
+本次配对时 Wear AVD 尝试连接宿主机的 5601 端口。补齐手机 AVD 的本地 ADB 端口转发后，系统配对成功。应用验收和构建都在本机完成，未使用 GitHub Actions。
 
 各客户端读到的均是本地网关的合成数据。手机扫码通过临时测试 AVD 的模拟相机完成。两种 Android 构建和网关测试可通过 scripts/local-ci.ps1 重跑。模拟器截图、UI 断言与 CI 日志保存在本机 .local/evidence。操作步骤见 [模拟器验收](AVD.md)。[Android Studio 的 Wear 配对要求](https://developer.android.com/training/wearables/get-started/connect-phone)
