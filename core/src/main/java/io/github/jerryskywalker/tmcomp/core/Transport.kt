@@ -10,9 +10,9 @@ import java.io.IOException
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 
-const val FROM_PHONE = "/tmcomp/v1/phone/"
-const val FROM_WATCH = "/tmcomp/v1/watch/"
-const val ENROLL = "/tmcomp/v1/enroll"
+const val FROM_PHONE = "/tmcomp/v2/phone/"
+const val FROM_WATCH = "/tmcomp/v2/watch/"
+const val SET_WATCH_HUB = "/tmcomp/v2/watch-hub"
 private const val PAYLOAD = "body"
 
 data class Incoming(val node: String, val path: String, val body: String)
@@ -50,12 +50,13 @@ class Transport(context: Context) {
         }
     }
 
-    suspend fun sendInvite(node: String, invite: DirectInvite) {
-        withTimeoutOrNull(4_000) {
-            Wearable.getMessageClient(context).sendMessage(
-                node, ENROLL, wireJson.encodeToString(DirectInvite.serializer(), invite).encodeToByteArray(),
+    suspend fun configureHub(node: String, setup: WatchHubSetup): WatchHubResult {
+        val reply = withTimeoutOrNull(40_000) {
+            Wearable.getMessageClient(context).sendRequest(
+                node, SET_WATCH_HUB, wireJson.encodeToString(WatchHubSetup.serializer(), setup).encodeToByteArray(),
             ).await()
-        } ?: throw IOException("暂时无法向手表发送配对码")
+        } ?: throw IOException("手表确认超时，请保持两端连接后重试")
+        return wireJson.decodeFromString<WatchHubResult>(reply.decodeToString())
     }
 
     suspend fun connectedNodes(): Set<String> = withTimeoutOrNull(4_000) {

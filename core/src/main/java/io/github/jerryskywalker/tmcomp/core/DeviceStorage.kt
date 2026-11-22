@@ -32,26 +32,26 @@ class DeviceStorage(context: Context) {
         editor.apply()
     }
 
-    fun credentials(): Credentials? = synchronized(lock) {
-        val blob = preferences.getString("credential", null) ?: return null
+    fun credentials(): HubConnection? = synchronized(lock) {
+        val blob = preferences.getString(HUB_CREDENTIAL, null) ?: return null
         runCatching {
             val packed = Base64.decode(blob, Base64.NO_WRAP)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, packed.copyOfRange(0, 12)))
-            wireJson.decodeFromString<Credentials>(cipher.doFinal(packed.copyOfRange(12, packed.size)).decodeToString())
+            wireJson.decodeFromString<HubConnection>(cipher.doFinal(packed.copyOfRange(12, packed.size)).decodeToString())
         }.getOrNull()
     }
 
-    fun saveCredentials(value: Credentials?) = synchronized(lock) {
+    fun saveCredentials(value: HubConnection?) = synchronized(lock) {
         val editor = preferences.edit()
         if (value == null) {
-            check(editor.remove("credential").commit()) { "无法清除设备授权" }
+            check(editor.remove(HUB_CREDENTIAL).commit()) { "无法清除 Hub 配置" }
         } else {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, key())
             val ciphertext = cipher.doFinal(wireJson.encodeToString(value).encodeToByteArray())
-            check(editor.putString("credential", Base64.encodeToString(cipher.iv + ciphertext, Base64.NO_WRAP)).commit()) {
-                "无法保存设备授权"
+            check(editor.putString(HUB_CREDENTIAL, Base64.encodeToString(cipher.iv + ciphertext, Base64.NO_WRAP)).commit()) {
+                "无法保存 Hub 配置"
             }
         }
     }
@@ -67,7 +67,8 @@ class DeviceStorage(context: Context) {
     }
 
     private companion object {
-        const val KEY_ALIAS = "companion-gateway-aes"
+        const val KEY_ALIAS = "token-monitor-hub-aes"
+        const val HUB_CREDENTIAL = "hub_credential"
         val lock = Any()
     }
 }

@@ -1,58 +1,57 @@
 # Token Monitor Companion
 
-在 Android 手机和 Wear OS 手表上查看自托管 Token Monitor 的账户额度、余额和用量。手机可以设置每块手表的同步方式、置顶额度和暂停状态，并查看手表回执。
+在 Android 手机和 Wear OS 手表上查看 Token Monitor Hub 的用量、账户额度和余额。手机提供可自定义总览、额度页、趋势和 Glance 桌面小工具。手表提供 StopWatch 看板和系统 Tile。
 
-| 组件 | 职责 |
-| --- | --- |
-| Token Monitor Agent + Hub | 继续在电脑采集，在 Hub 汇总 |
-| Companion Gateway | 读取 Hub 的聚合结果，签发设备授权，保存手表配置 |
-| Android | 扫码连接网关，展示用量和管理手表 |
-| Wear OS | 接收手机快照，或独立访问网关 |
+## 安装
 
-手机同步走 Hub → Companion Gateway → 手机 → Wear OS Data Layer → 手表。独立直连走 Hub → Companion Gateway → 手表。两种方式共用服务端保存的手表配置。
+在 [GitHub Releases](https://github.com/JerrySkywalker/token-monitor-companion/releases/latest) 下载适合设备的 APK。
 
-网关从 Hub 读取 GET /api/stats，向客户端提供今天和本月的 token、已定价成本、额度窗与充值余额。每个 provider 的可用指标取决于上游配置。上游未报告的数值显示为未知。余额沿用原币种，订阅额度按各时间窗显示。[Token Monitor Hub 接口](https://github.com/Javis603/token-monitor/blob/v0.95.1/docs/API.md#get-apistats)
+- **Android 11 或以上**。在手机安装 `token-monitor-companion-android-v0.1.0.apk`。
+- **Wear OS**。在手表安装 `token-monitor-companion-wear-os-v0.1.0.apk`，可使用 [Wear OS 无线调试](https://developer.android.com/training/wearables/get-started/debug-wifi) 侧载。
+- 两端 Release APK 使用同一个应用 ID 和发布证书。若已装开发版，Android 会拒绝用不同证书覆盖安装。卸载开发版会清除其本地设置，之后可在 Release 版重新连接 Hub。
 
-## 自托管
+下载的 `SHA256SUMS.txt` 可用于核对两个 APK 文件。
 
-1. 启用自己的 Token Monitor Hub，确认已有电脑通过正常的 Token Monitor 同步向它上传使用量。
-2. 复制 .env.example 为 .env。设置 Hub origin（HUB_URL）、Hub 密钥文件（HUB_SECRET_PATH）和设备能访问的网关 origin（PUBLIC_URL）。例如 https://usage.example.net。密钥文件只写密钥一行，应能被容器的 node 用户读取。
-3. 运行以下命令。反向代理将公开的 HTTPS 域名转发到 127.0.0.1:8787。网关的持久 SQLite 数据在 companion-data 卷里。
+## 连接现有 Token Monitor Hub
 
-```sh
-docker compose up -d --build
-docker compose ps
-curl --fail https://usage.example.net/healthz
-docker compose exec gateway node src/cli.mjs issue phone
-```
+在手机 App 首页填写 Hub 的 **HTTPS 地址**（例如 `https://hub.example.com`）和 **Hub Secret**，点「连接 Hub」。之后可在「设置 → Token Monitor Hub」查看连接状态、编辑配置和检查连接。手机可以独立使用。
 
-4. 手机打开 Token Monitor，点「扫描配对二维码」。也可输入终端显示的服务器地址和一次性码。配对码五分钟有效且只能用一次。
-5. 在 Android 系统中配对手表，安装同一签名的手机和手表 APK，并在表上打开应用。手机的「手表」页查找并绑定。网关安装是单用户实例，所有已授权的手机都能管理这个实例上的手表。
+两端直接使用 [Token Monitor Hub API](https://github.com/Javis603/token-monitor/blob/v0.95.1/docs/API.md#get-apistats)。日常使用只需现有 Hub，无需部署 Companion Server。
 
-网关以 HTTPS 访问 Hub。单机内网部署如需接入现有 HTTP Hub，可显式给网关设置 HUB_ALLOW_INSECURE=1，并保证该链路在可信网络内。移动端 release 需要 HTTPS。Hub 密钥保留在网关，手机和手表用不同作用域的随机凭据。网关输出不包括上游会话、项目、日志和设备诊断。
+### 扫码导入到手表
 
-## 手表同步
+1. 手机已连接 Hub，手机和手表连接到可相互访问的同一 Wi‑Fi。
+2. 在手表 App 点「从手机导入 Hub」。已有看板时，从齿轮进入连接设置。
+3. 在手机 App 打开「设置 → Wear OS → 扫描手表配对码」，扫表上的二维码，再点「发送 Hub 配置」。
+4. 等手机显示「手表已验证 Hub」。手表验证配置后保存，并进入「独立直连」。
 
-**手机同步。** 手机从网关取数，向系统已配对的手表发送快照。手表不需要网关授权。打开手表上的应用后，在手机中绑定即可。手表记录最后一份快照并标注新鲜度。
+扫码仅需局域网和手机相机，即使 Google Play 服务的手表同步不可用也能导入。二维码包含临时连接信息和一次性配对密钥，有效期两分钟。Hub 地址和 Secret 经 AES-GCM 加密发送。两端使用 Android Keystore 保护已保存的 Secret。
 
-**独立直连。** 手机将该表的模式设为独立直连，并尝试通过 Wear OS Data Layer 发送短期授权码。自动授权未送达时，在手表输入手机显示的地址和代码。手机不可用时，也可让服务器管理员运行 docker compose exec gateway node src/cli.mjs issue wear，从手表完成独立入网。手表用自身可用网络独立取数，包括 Wi-Fi 和系统提供的 LTE 网络。实际路由由 Wear OS 选择。
+### 手机推送
 
-手机保存设置后，手表回执会显示版本和最后收到的数据时间。切换为手机同步需要先绑定手机。暂停保留最后快照，继续读取管理配置以允许远程恢复。请求刷新在对应链路可用时生效。手机与手表后台检查由系统调度，页面上的刷新按钮会主动拉取。移除手表时撤销其网关凭据。管理服务器设备也可以运行以下命令。
+1. 先在系统中配对 Android 手机和 Wear OS 手表，在两端打开 App。
+2. 在手机 App 进入「设置 → Wear OS」，找到并绑定手表。绑定后可导入当前手机的 Hub 地址和 Secret，为之后的独立直连做好准备。
+3. 返回手表设置，选择「手机推送」。手机从自己的 Hub 取数，经 Wear OS Data Layer 转发用量，手表回执显示「已同步」。手机也可设置暂停、置顶额度、外圈来源和直连刷新间隔，或请求刷新。
 
-```sh
-docker compose exec gateway node src/cli.mjs devices
-docker compose exec gateway node src/cli.mjs revoke DEVICE_ID
-```
+若已通过扫码在表上启用独立直连，先在手表连接页点「允许手机发现」，再在手机绑定。持续用量推送依赖两端可用的 [Wear OS Data Layer](https://developer.android.com/training/wearables/data/overview)。
 
-## 本地开发
+### 独立直连
 
-工具为 JDK 17、Node.js 24+、Android SDK Platform 36、Build Tools 36.0.0、Platform Tools 和 Android Emulator。Android Studio 打开仓库根目录，Gradle JDK 选 17。手机和手表有同一个 Android application ID。编译两种正式 APK 时应使用同一应用签名。
+- 通过扫码导入时，手表自动进入独立直连。使用系统绑定时，可在手机的「手表 Hub 直连设置」发送当前手机的 Hub 配置，或填写另一套配置，再选择「独立直连」。
+- 仅安装手表 App 时，可在手表点「本机配置 Hub」，直接输入 HTTPS 地址和 Secret。
+- 手表随后通过自己的 Wi‑Fi 或可用的蜂窝网络读取 Hub。点看板底部的时间手动刷新，再打开齿轮查看「本机取数」。这个时间代表手表最近一次成功读取的时间，即使采集器尚未上报新数据也会更新。
+
+## 本地构建与验收
+
+使用 JDK 17、Android SDK Platform 36、Build Tools 36.0.0 和 Platform Tools。从仓库根目录运行 PowerShell：
 
 ```powershell
 .\scripts\local-ci.ps1
 .\scripts\local-ci.ps1 -Release
 ```
 
-调试 APK 生成在 mobile/build/outputs/apk/debug 和 wear/build/outputs/apk/debug。Release 编译产物默认未签名。开发顺序在 [ROADMAP.md](ROADMAP.md)，模拟器验收步骤在 [docs/AVD.md](docs/AVD.md)，本机实测见 [验收记录](docs/ACCEPTANCE.md)。
+本地 CI 运行 Kotlin 单元测试和两端 Lint，并构建 Debug APK。加 `-Release` 会同时构建两端 Release APK。Gradle 的 Release 输出默认未签名。随 GitHub Release 发布的可安装文件由同一项目证书签名。
 
-项目采用 MIT 许可证。完成提醒由独立应用处理。
+查看 [模拟器验收方法](docs/AVD.md) 和 [验收结论](docs/ACCEPTANCE.md)。
+
+采用 [MIT 许可证](LICENSE)。任务完成提醒由独立项目负责。仓库中的早期网关代码仅用于维护已有历史版本。

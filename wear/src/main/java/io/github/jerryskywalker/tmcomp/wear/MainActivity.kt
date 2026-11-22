@@ -1,11 +1,17 @@
 package io.github.jerryskywalker.tmcomp.wear
 
+import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.Context
 import android.os.Bundle
 import android.text.InputType
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -17,6 +23,9 @@ import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.*
 import io.github.jerryskywalker.tmcomp.core.*
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -36,6 +45,8 @@ private fun WatchScreen() {
     var view by remember { mutableStateOf(sync.view()) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var connection by rememberSaveable { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
 
     fun action(block: suspend () -> Unit) {
         if (busy) return
@@ -64,8 +75,21 @@ private fun WatchScreen() {
     }
 
     val config = view.config
+    val ring = config?.ringProvider
     val report = view.report
     val snapshot = view.snapshot
+    BackHandler(connection && snapshot != null) { connection = false }
+    if (!connection && snapshot != null) {
+        val status = when {
+            busy -> "更新中"
+            config?.paused == true -> "已暂停"
+            report?.state == WatchStatus.OFFLINE || error != null -> "更新失败"
+            config?.mode == Mode.DIRECT -> "独立直连"
+            else -> "手机推送"
+        }
+        StopWatchDashboard(snapshot, config, status, ring, { connection = true }) { action { sync.tick(true) } }
+        return
+    }
     val listState = rememberScalingLazyListState()
     Scaffold(timeText = { TimeText() }, positionIndicator = { PositionIndicator(scalingLazyListState = listState) }) {
         ScalingLazyColumn(
@@ -77,7 +101,7 @@ private fun WatchScreen() {
             item {
                 val label = when (config?.mode) {
                     null -> "等待绑定"
-                    Mode.PHONE -> "手机同步"
+                    Mode.PHONE -> "手机推送"
                     Mode.DIRECT -> "独立直连"
                 }
                 Text(label + if (config != null) " · v" + config.version else "", color = MaterialTheme.colors.primary)
@@ -86,9 +110,9 @@ private fun WatchScreen() {
                 val description = when {
                     busy -> "更新中"
                     config?.paused == true -> "已暂停"
-                    report?.state == WatchStatus.NEEDS_PAIRING -> "等待直连授权"
-                    report?.state == WatchStatus.OFFLINE -> "服务器暂不可达"
-                    snapshot == null && config == null -> "请在手机应用中绑定手表，或手动连接服务器。"
+                    report?.state == WatchStatus.NEEDS_PAIRING -> "等待 Hub 地址和 Secret"
+                    report?.state == WatchStatus.OFFLINE -> "Hub 暂不可达"
+                    snapshot == null && config == null -> "在手机的 Wear OS 设置中添加手表。"
                     snapshot == null -> "等待快照"
                     snapshot.stale || locallyStale(snapshot.upstreamAt, snapshot.freshnessMs) -> "可能过期 · " + displayClock(snapshot.upstreamAt)
                     else -> "更新于 " + displayClock(snapshot.upstreamAt)
@@ -97,61 +121,108 @@ private fun WatchScreen() {
             }
             (error ?: view.error)?.let { failure -> item { Text(failure, textAlign = TextAlign.Center, color = Color(0xffffb4ab)) } }
             if (snapshot != null) {
-                val readings = snapshot.readings.let { rows ->
-                    val pinned = rows.find { it.id == config?.pinnedId }
-                    listOfNotNull(pinned) + rows.filterNot { it == pinned }
+                item {
+                    val source = if (config?.mode == Mode.DIRECT) "本机取数" else "手机取数"
+                    Text(source + " " + localFetchClock(snapshot.retrievedAt),
+                        textAlign = TextAlign.Center, style = MaterialTheme.typography.caption1)
                 }
-                for (reading in readings) {
-                    item {
-                        Card(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
-                            Text(reading.title(), style = MaterialTheme.typography.caption2)
-                            Text(reading.value(), style = MaterialTheme.typography.title3)
-                            if (reading.boundaryAt != null) {
-                                val label = when (reading.boundaryKind) { "expiry" -> "到期 "; "mixed" -> "重置 / 到期 "; else -> "重置 " }
-                                Text(label + displayClock(reading.boundaryAt), style = MaterialTheme.typography.caption2)
-                            }
-                            if (reading.stale || locallyStale(reading.observedAt, snapshot.freshnessMs) || snapshot.stale) {
-                                Text("数据可能过期", style = MaterialTheme.typography.caption2)
+                item { Chip(onClick = { connection = false }, label = { Text("返回看板") }, modifier = Modifier.fillMaxWidth()) }
+            }
+            item {
+                Chip(onClick = { importing = true }, label = { Text("从手机导入 Hub") },
+                    enabled = !busy, modifier = Modifier.fillMaxWidth())
+            }
+            if (config == null || config.mode == Mode.DIRECT) {
+                item {
+                    Chip(onClick = {
+                        promptHubInput(context, "Hub 地址", sync.hubOrigin(), InputType.TYPE_TEXT_VARIATION_URI) { address ->
+                            promptHubSecret(context) { secret ->
+                                action {
+                                    sync.configureLocalHub(hubConnection(address, secret, BuildConfig.DEBUG))
+                                    connection = false
+                                }
                             }
                         }
-                    }
+                    }, label = { Text("本机配置 Hub") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
                 }
+            }
+            if (view.localOnly) {
                 item {
-                    Text("今日 " + displayNumber(snapshot.today.tokens) + " tokens", style = MaterialTheme.typography.caption1, textAlign = TextAlign.Center)
+                    Chip(onClick = { action { sync.enablePhoneDiscovery() } }, label = { Text("允许手机发现") },
+                        enabled = !busy, modifier = Modifier.fillMaxWidth())
+                }
+            }
+            if (snapshot != null) {
+                item { Text("外圈来源", color = MaterialTheme.colors.primary) }
+                item { Chip(onClick = { action { sync.changeRing(null) } },
+                    label = { Text("跟随置顶" + if (ring == null) " ✓" else "") }, modifier = Modifier.fillMaxWidth()) }
+                item { Chip(onClick = { action { sync.changeRing("") } },
+                    label = { Text("关闭外圈" + if (ring == "") " ✓" else "") }, modifier = Modifier.fillMaxWidth()) }
+                snapshot.readings.filter { it.kind == "quota" }.distinctBy { it.toolKey }.forEach { row ->
+                    item {
+                        Chip(onClick = { action { sync.changeRing(row.toolKey) } },
+                            label = { Text(row.provider + if (ring == row.toolKey) " ✓" else "") }, modifier = Modifier.fillMaxWidth())
+                    }
                 }
             }
             item {
                 Chip(onClick = { action { sync.tick(true) } }, label = { Text("刷新") },
                     enabled = !busy, modifier = Modifier.fillMaxWidth())
             }
-            if (config == null || config.mode == Mode.DIRECT) {
-                item {
-                    Chip(onClick = {
-                        prompt(context, "服务器地址", sync.savedOrigin(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI) { url ->
-                            prompt(context, "一次性配对码", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS) { code ->
-                                action { sync.enroll(PairCode(origin(url, BuildConfig.DEBUG), pairingCode(code))) }
-                            }
-                        }
-                    }, label = { Text("输入直连配对码") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
-                }
+            report?.hubOrigin?.let { address ->
+                item { Text(address, textAlign = TextAlign.Center, style = MaterialTheme.typography.caption2) }
             }
             if (config != null) {
                 item {
                     Chip(onClick = {
-                        AlertDialog.Builder(context).setTitle("清除手表绑定？").setMessage("要撤销服务器授权，请同时在手机中移除此手表。")
+                        AlertDialog.Builder(context).setTitle("清除手表配置？").setMessage("本机会清除 Hub 配置、快照和手机绑定。")
                             .setNegativeButton("取消", null).setPositiveButton("清除") { _, _ -> action { sync.reset() } }.show()
-                    }, label = { Text("清除绑定") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
+                    }, label = { Text("清除配置") }, enabled = !busy, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
     }
+    if (importing) {
+        WatchImportHub(sync, onDismiss = { importing = false }) {
+            importing = false
+            view = sync.view()
+            connection = false
+            error = null
+        }
+    }
 }
 
-private fun prompt(context: android.content.Context, title: String, old: String, type: Int, value: (String) -> Unit) {
-    val field = EditText(context).apply { inputType = type; setSingleLine(); setText(old); setSelection(text.length) }
-    val dialog = AlertDialog.Builder(context).setTitle(title).setView(field)
-        .setNegativeButton("取消", null).setPositiveButton("继续") { _, _ -> value(field.text.toString()) }.create()
-    field.requestFocus()
-    dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+private fun localFetchClock(timestamp: String) = runCatching {
+    DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault()).format(Instant.parse(timestamp))
+}.getOrDefault("未知")
+
+// 自托管 Hub 使用 API 密钥，手表在 Data Layer 不可用时仍需要一个独立的输入入口。
+@SuppressLint("WearPasswordInput")
+private fun promptHubSecret(context: Context, onSecret: (String) -> Unit) =
+    promptHubInput(context, "Hub Secret", "", InputType.TYPE_TEXT_VARIATION_PASSWORD, secure = true, onValue = onSecret)
+
+private fun promptHubInput(
+    context: Context,
+    title: String,
+    current: String,
+    variation: Int,
+    secure: Boolean = false,
+    onValue: (String) -> Unit,
+) {
+    val input = EditText(context).apply {
+        inputType = InputType.TYPE_CLASS_TEXT or variation or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+        setSingleLine(true)
+        if (secure) isSaveEnabled = false
+        setText(current)
+        setSelection(text.length)
+    }
+    val dialog = AlertDialog.Builder(context).setTitle(title).setView(input)
+        .setNegativeButton("取消", null)
+        .setPositiveButton(if (secure) "连接 Hub" else "继续") { _, _ -> onValue(input.text.toString()) }
+        .create()
+    if (secure) dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+    input.requestFocus()
     dialog.show()
 }

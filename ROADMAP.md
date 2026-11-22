@@ -1,5 +1,7 @@
 # MVP 开发清单与路线图
 
+此处保留初始 MVP 路线。当前 Android 架构见 [直接从 Hub 取数](README.md#数据路径)。
+
 目标是在六小时开发窗口内，完成 Token Monitor 的 Android 用量看板、Wear OS 伴侣和只读网关。验收在本地 CI 与 Android Emulator 完成。首轮设备是手机 AVD 和 Wear OS AVD。
 
 | 阶段 | 开发清单 | 验收证据 |

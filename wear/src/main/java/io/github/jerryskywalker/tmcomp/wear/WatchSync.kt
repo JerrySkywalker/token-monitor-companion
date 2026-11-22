@@ -2,6 +2,8 @@ package io.github.jerryskywalker.tmcomp.wear
 
 import android.content.Context
 import android.os.Build
+import android.util.Log
+import androidx.wear.tiles.TileService
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -11,10 +13,12 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.TaskCompletionSource
 import com.google.android.gms.wearable.DataEventBuffer
-import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
 import io.github.jerryskywalker.tmcomp.core.*
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -24,11 +28,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
+
+internal const val WATCH_VIEW = "hub_watch_view"
 
 @Serializable
-data class PhoneLink(val node: String, val binding: String, val origin: String)
+data class PhoneLink(val node: String, val binding: String)
 
 @Serializable
 data class WatchView(
@@ -36,107 +40,79 @@ data class WatchView(
     val snapshot: Snapshot? = null,
     val report: Report? = null,
     val error: String? = null,
+    val phoneOrigin: String? = null,
+    val localOnly: Boolean = false,
 )
 
 class WatchSync(context: Context) {
     private val context = context.applicationContext
     private val storage = DeviceStorage(context)
-    private val transport = Transport(context)
+    private val transport by lazy { Transport(context) }
     private val label get() = Build.MODEL.take(70)
     private val id get() = storage.installationId
 
-    fun view() = storage.read<WatchView>("view") ?: WatchView()
-    fun link() = storage.read<PhoneLink>("link")
-    fun savedOrigin(): String = storage.credentials()?.origin ?: link()?.origin.orEmpty()
-    private fun save(view: WatchView) = storage.write("view", view)
+    fun view() = storage.read<WatchView>(WATCH_VIEW) ?: WatchView()
+    fun link() = storage.read<PhoneLink>(LINK)
+    fun hubOrigin() = storage.credentials()?.origin.orEmpty()
+    private fun save(view: WatchView) {
+        val previous = view()
+        if (view == previous) return
+        storage.write(WATCH_VIEW, view)
+        if (view.snapshot != previous.snapshot || view.config != previous.config || view.error != previous.error) {
+            runCatching { TileService.getUpdater(context).requestUpdate(DashboardTile::class.java) }
+        }
+    }
 
     suspend fun tick(force: Boolean = false) = mutex.withLock { tickLocked(force) }
 
     private suspend fun tickLocked(force: Boolean) {
         acceptPhoneData()
         val current = view()
-        val credentials = storage.credentials()
-        if (current.config?.mode == Mode.DIRECT || (current.config == null && credentials != null)) {
-            if (credentials == null || (link()?.origin?.let { it != credentials.origin } == true)) {
-                save(current.copy(error = null))
-                publishStatus(WatchStatus.NEEDS_PAIRING)
-                return
-            }
-            schedule(current.config?.refreshMinutes ?: 30, credentials)
-            val api = credentials.gateway()
-            try {
-                val config = api.watchConfig()
-                require(config.id == id) { "服务器返回的设备身份不匹配" }
-                if (current.config == null || config.version >= current.config.version) {
-                    val retained = current.snapshot.takeIf { current.config?.mode == config.mode }
-                    save(current.copy(config = config, snapshot = retained, error = null))
-                }
-                val updated = view()
-                val desired = requireNotNull(updated.config)
-                if (desired.mode == Mode.PHONE) {
-                    stopDirect()
-                    acceptPhoneData()
-                    phoneStatus(force)
-                    publishHttp(api)
-                    return
-                }
-                schedule(desired.refreshMinutes, credentials)
-                if (desired.paused) {
-                    publishStatus(WatchStatus.PAUSED, force)
-                } else {
-                    val snapshot = api.watchUsage()
-                    save(updated.copy(snapshot = snapshot, error = null))
-                    publishStatus(WatchStatus.READY, force)
-                }
-                publishHttp(api)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: GatewayException) {
-                if (failure.status in listOf(401, 404)) {
-                    storage.saveCredentials(null)
-                    stopDirect()
-                    save(view().copy(error = failure.message))
-                    publishStatus(WatchStatus.NEEDS_PAIRING)
-                } else {
-                    save(view().copy(error = failure.message))
-                    publishStatus(WatchStatus.OFFLINE)
-                }
-            } catch (failure: Exception) {
-                save(view().copy(error = failure.localizedMessage ?: "连接失败"))
-                publishStatus(WatchStatus.OFFLINE)
-            }
-        } else {
-            stopDirect()
-            phoneStatus(force)
-        }
-    }
-
-    private suspend fun phoneStatus(force: Boolean) {
-        val current = view()
         val config = current.config
-        if (config == null) {
-            publishPacket()
-            return
+        val credentials = storage.credentials()
+        when {
+            config == null -> {
+                stopDirect()
+                publishPacket()
+            }
+            config.paused -> {
+                stopDirect()
+                publishStatus(WatchStatus.PAUSED, force)
+            }
+            config.mode == Mode.PHONE -> {
+                stopDirect()
+                publishStatus(if (current.snapshot == null) WatchStatus.WAITING else WatchStatus.READY, force)
+            }
+            credentials == null -> {
+                stopDirect()
+                publishStatus(WatchStatus.NEEDS_PAIRING, force)
+            }
+            else -> {
+                schedule(config.refreshMinutes)
+                try {
+                    val snapshot = Hub(credentials).snapshot(current.snapshot).forWatch(config.pinnedId)
+                    save(current.copy(snapshot = snapshot, error = null))
+                    publishStatus(WatchStatus.READY, force)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    save(current.copy(error = failure.localizedMessage ?: "Hub 连接失败"))
+                    publishStatus(WatchStatus.OFFLINE, force)
+                }
+            }
         }
-        val state = when {
-            config.paused -> WatchStatus.PAUSED
-            current.snapshot == null -> WatchStatus.WAITING
-            else -> WatchStatus.READY
-        }
-        publishStatus(state, force)
     }
 
     private suspend fun acceptPhoneData() {
+        if (view().localOnly) return
         val previous = link()
         val packet = checked { transport.items(FROM_PHONE) }.orEmpty().asSequence()
             .filter { it.path == FROM_PHONE + id && (previous == null || it.node == previous.node) }
-            .mapNotNull { incoming ->
-                val value = runCatching { wireJson.decodeFromString<PhonePacket>(incoming.body) }.getOrNull()
-                if (value != null && value.config.id == id && validOrigin(value.origin)) incoming.node to value else null
-            }
-            .filter { (_, value) ->
-                if (previous != null) value.binding == previous.binding && value.origin == previous.origin
-                else !value.detached && (storage.credentials()?.origin?.let { it == value.origin } ?: true)
+            .mapNotNull { item ->
+                val value = runCatching { wireJson.decodeFromString<PhonePacket>(item.body) }.getOrNull()
+                if (value?.config?.id == id) item.node to value else null
+            }.filter { (_, value) ->
+                if (previous != null) value.binding == previous.binding else !value.detached
             }.maxByOrNull { it.second.config.version } ?: return
         val (node, value) = packet
         if (value.detached) {
@@ -144,48 +120,77 @@ class WatchSync(context: Context) {
             publishPacket()
             return
         }
-        if (previous == null) {
-            storage.write("link", PhoneLink(node, value.binding, value.origin))
-        }
         val current = view()
-        val config = current.config
-        val sameRegistration = previous != null || storage.credentials() != null
-        if (sameRegistration && config != null && value.config.version < config.version) return
-        val retained = current.snapshot.takeIf { sameRegistration && config?.mode == value.config.mode }
+        val config = if (previous != null && current.config?.version == value.config.version) {
+            value.config.copy(report = null, ringProvider = current.config.ringProvider)
+        } else value.config.copy(report = null)
+        if (previous != null && current.config != null && config.version < current.config.version) return
+        if (previous == null) storage.write(LINK, PhoneLink(node, value.binding))
+        val modeMatches = current.config?.mode == config.mode
+        val sameSource = config.mode == Mode.DIRECT || current.phoneOrigin == value.origin
+        val retained = current.snapshot.takeIf { modeMatches && sameSource }
         val provided = value.snapshot?.takeIf {
-            value.config.mode == Mode.PHONE && !value.config.paused &&
-                (retained == null || it.retrievedAt >= retained.retrievedAt)
+            config.mode == Mode.PHONE && !config.paused &&
+                (retained == null || newerThanOrEqual(it.retrievedAt, retained.retrievedAt))
         }
-        val error = current.error.takeIf { value.config.mode == Mode.DIRECT }
-        save(current.copy(config = value.config, snapshot = provided ?: retained, error = error))
+        save(current.copy(config = config, snapshot = provided ?: retained, phoneOrigin = value.origin,
+            error = current.error.takeIf { config.mode == Mode.DIRECT && modeMatches }))
     }
 
-    suspend fun enroll(pair: PairCode) = mutex.withLock {
-        require(link()?.origin?.let { it == pair.url } ?: true) { "服务器地址与手机绑定不一致" }
-        enrollLocked(pair)
-    }
+    private fun newerThanOrEqual(next: String, prior: String): Boolean =
+        runCatching { !Instant.parse(next).isBefore(Instant.parse(prior)) }.getOrDefault(false)
 
-    suspend fun receive(node: String, message: DirectInvite) = mutex.withLock {
+    suspend fun configureHub(node: String, setup: WatchHubSetup): WatchHubResult = mutex.withLock {
         acceptPhoneData()
-        val current = link() ?: return@withLock
-        if (message.id != id || message.binding != current.binding || message.pair.url != current.origin ||
-            current.node != node || !validOrigin(message.pair.url)) return@withLock
-        if (message.pair.expires != 0L && message.pair.expires <= System.currentTimeMillis()) return@withLock
-        val credentials = storage.credentials()
-        if (credentials?.origin == message.pair.url &&
-            checked { credentials.gateway().watchConfig() }?.id == id) {
-            tickLocked(false)
-        } else {
-            enrollLocked(message.pair)
+        val connection = link()
+        if (connection == null || setup.id != id || setup.binding != connection.binding || connection.node != node) {
+            return@withLock WatchHubResult(error = "手表未与这台手机绑定")
         }
+        val hub = hubConnection(setup.hub.origin, setup.hub.secret, BuildConfig.DEBUG)
+        val current = view()
+        val config = requireNotNull(current.config) { "请先在手机上完成手表绑定" }
+        saveHub(hub, current, config)
+        WatchHubResult(origin = hub.origin)
     }
 
-    private suspend fun enrollLocked(pair: PairCode) {
-        val credentials = Gateway(pair.url).enroll(pair.code, "wear", label, id)
-        storage.saveCredentials(credentials)
-        val old = view()
-        if (link() == null) save(WatchView(report = old.report))
-        tickLocked(true)
+    suspend fun configureLocalHub(hub: HubConnection, fromPhoneQr: Boolean = false) = mutex.withLock {
+        val current = view()
+        val bound = link() != null
+        val wasPhoneMode = current.config?.mode == Mode.PHONE
+        require(!bound || !wasPhoneMode || fromPhoneQr) { "请先切换到独立直连" }
+        val config = (current.config ?: WatchConfig(id, label)).copy(mode = Mode.DIRECT)
+        // QR is also available if the existing Data Layer link is temporarily unavailable.
+        val localOnly = current.localOnly || !bound || (fromPhoneQr && wasPhoneMode)
+        saveHub(hub, current.copy(localOnly = localOnly), config)
+    }
+
+    suspend fun enablePhoneDiscovery() = mutex.withLock {
+        save(view().copy(localOnly = false))
+        tickLocked(force = true)
+    }
+
+    private suspend fun saveHub(hub: HubConnection, current: WatchView, config: WatchConfig) {
+        val snapshot = Hub(hub).snapshot(
+            current.snapshot.takeIf { config.mode == Mode.DIRECT && storage.credentials()?.origin == hub.origin }
+        )
+        storage.saveCredentials(hub)
+        val direct = config.mode == Mode.DIRECT
+        save(current.copy(config = config, snapshot = if (direct) snapshot.forWatch(config.pinnedId) else current.snapshot,
+            error = null))
+        if (direct && !config.paused) schedule(config.refreshMinutes)
+        val status = when {
+            config.paused -> WatchStatus.PAUSED
+            view().snapshot == null -> WatchStatus.WAITING
+            else -> WatchStatus.READY
+        }
+        publishStatus(status, true)
+    }
+
+    suspend fun changeRing(provider: String?) = mutex.withLock {
+        val current = view()
+        val config = current.config ?: return@withLock
+        save(current.copy(config = config.copy(ringProvider = provider)))
+        publishStatus(current.report?.state ?: WatchStatus.WAITING, force = true)
     }
 
     suspend fun reset() = mutex.withLock {
@@ -196,9 +201,9 @@ class WatchSync(context: Context) {
     private suspend fun resetLocked() {
         val unlinkedId = id
         storage.saveCredentials(null)
-        storage.write<PhoneLink>("link", null)
-        storage.write<WatchView>("view", null)
-        storage.preferences.edit().remove("installation").remove("report_sequence").commit()
+        storage.write<PhoneLink>(LINK, null)
+        storage.write<WatchView>(WATCH_VIEW, null)
+        storage.preferences.edit().remove("installation").remove(REPORT_SEQUENCE).commit()
         stopDirect()
         checked { transport.removeOwned(FROM_WATCH + unlinkedId) }
     }
@@ -207,45 +212,55 @@ class WatchSync(context: Context) {
         val current = view()
         val config = current.config ?: return
         val at = current.snapshot?.upstreamAt
+        val source = storage.credentials()?.origin
         val prior = current.report
-        if (force || prior == null || prior.appliedVersion != config.version || prior.mode != config.mode || prior.state != status || prior.snapshotAt != at) {
-            val sequence = maxOf(storage.preferences.getLong("report_sequence", 0), prior?.sequence ?: 0) + 1
-            storage.preferences.edit().putLong("report_sequence", sequence).apply()
-            save(current.copy(report = Report(config.version, sequence, config.mode, status, at)))
+        if (force || prior == null || prior.appliedVersion != config.version || prior.mode != config.mode ||
+            prior.state != status || prior.snapshotAt != at || prior.hubOrigin != source || prior.ringProvider != config.ringProvider) {
+            val sequence = maxOf(storage.preferences.getLong(REPORT_SEQUENCE, 0), prior?.sequence ?: 0) + 1
+            storage.preferences.edit().putLong(REPORT_SEQUENCE, sequence).apply()
+            val readings = if (config.mode == Mode.DIRECT) current.snapshot?.readings.orEmpty().take(76) else emptyList()
+            save(current.copy(report = Report(config.version, sequence, config.mode, status, at, source, readings, config.ringProvider)))
         }
         publishPacket()
     }
 
     private suspend fun publishPacket() {
         val view = view()
-        checked { transport.send(FROM_WATCH + id, wireJson.encodeToString(WatchPacket(id, label, link()?.binding, view.report))) }
+        if (view.localOnly) return
+        val binding = link()?.binding
+        val packet = WatchPacket(id, label, binding, view.report.takeIf { binding != null },
+            view.config?.copy(report = null).takeIf { binding == null })
+        try {
+            transport.send(FROM_WATCH + id, wireJson.encodeToString(packet))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            if (BuildConfig.DEBUG) Log.w("TmCompDataLayer", "Could not publish watch state", failure)
+        }
     }
 
-    private suspend fun publishHttp(api: Gateway) {
-        val report = view().report ?: return
-        checked { api.watchReport(report) }
-    }
-
-    private fun validOrigin(value: String) = runCatching { origin(value, BuildConfig.DEBUG) == value }.getOrDefault(false)
-
-    private fun schedule(minutes: Long, credentials: Credentials) {
-        val key = minutes.coerceIn(15, 1440).toString() + "|" + credentials.origin
-        val same = storage.preferences.getString("schedule", null) == key
-        val periodic = PeriodicWorkRequestBuilder<WatchWorker>(minutes.coerceIn(15, 1440), TimeUnit.MINUTES)
+    private fun schedule(minutes: Long) {
+        val interval = minutes.coerceIn(15, 1440)
+        val old = storage.preferences.getLong(SCHEDULE, 0L)
+        if (old == interval) return
+        val periodic = PeriodicWorkRequestBuilder<WatchWorker>(interval, TimeUnit.MINUTES)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC, if (same) ExistingPeriodicWorkPolicy.KEEP else ExistingPeriodicWorkPolicy.UPDATE, periodic)
-        if (!same) storage.preferences.edit().putString("schedule", key).apply()
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE, periodic)
+        storage.preferences.edit().putLong(SCHEDULE, interval).apply()
     }
 
     private fun stopDirect() {
-        if (storage.preferences.contains("schedule")) {
+        if (storage.preferences.contains(SCHEDULE) || storage.preferences.contains("schedule")) {
             WorkManager.getInstance(context).cancelUniqueWork(PERIODIC)
-            storage.preferences.edit().remove("schedule").apply()
+            storage.preferences.edit().remove(SCHEDULE).remove("schedule").apply()
         }
     }
 
     companion object {
         private const val PERIODIC = "watch-direct"
+        private const val LINK = "hub_phone_link"
+        private const val SCHEDULE = "hub_schedule"
+        private const val REPORT_SEQUENCE = "hub_report_sequence"
         private val mutex = Mutex()
 
         fun enqueue(context: Context) {
@@ -275,12 +290,23 @@ class WatchListener : WearableListenerService() {
         WatchSync.enqueue(this)
     }
 
-    override fun onMessageReceived(messageEvent: MessageEvent) {
-        if (messageEvent.path != ENROLL) return
-        val message = runCatching { wireJson.decodeFromString<DirectInvite>(messageEvent.data.decodeToString()) }.getOrNull() ?: return
-        val node = messageEvent.sourceNodeId
+    override fun onRequest(nodeId: String, path: String, request: ByteArray): Task<ByteArray>? {
+        if (path != SET_WATCH_HUB || request.size > 8192) return null
+        val task = TaskCompletionSource<ByteArray>()
         val context = applicationContext
-        scope.launch { checked { WatchSync(context).receive(node, message) } }
+        val message = runCatching { wireJson.decodeFromString<WatchHubSetup>(request.decodeToString()) }.getOrNull() ?: return null
+        scope.launch {
+            val reply = try {
+                WatchSync(context).configureHub(nodeId, message)
+            } catch (cancelled: CancellationException) {
+                task.trySetException(cancelled)
+                throw cancelled
+            } catch (failure: Exception) {
+                WatchHubResult(error = failure.localizedMessage ?: "无法设置手表 Hub")
+            }
+            task.trySetResult(wireJson.encodeToString(reply).encodeToByteArray())
+        }
+        return task.task
     }
 
     private companion object {

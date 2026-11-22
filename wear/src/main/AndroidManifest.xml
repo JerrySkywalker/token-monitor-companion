@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-feature android:name="android.hardware.type.watch" />
     <application android:label="Token Monitor" android:allowBackup="false" android:dataExtractionRules="@xml/companion_data_extraction"
         android:usesCleartextTraffic="false"
@@ -11,14 +12,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service android:name=".DashboardTile" android:label="Token Monitor"
+            android:exported="true" android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter><action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" /></intent-filter>
+        </service>
         <service android:name=".WatchListener" android:exported="true">
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
-                <data android:scheme="wear" android:host="*" android:pathPrefix="/tmcomp/v1/phone/" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/tmcomp/v2/phone/" />
             </intent-filter>
             <intent-filter>
-                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
-                <data android:scheme="wear" android:host="*" android:path="/tmcomp/v1/enroll" />
+                <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:path="/tmcomp/v2/watch-hub" />
             </intent-filter>
         </service>
     </application>

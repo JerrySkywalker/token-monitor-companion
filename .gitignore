@@ -7,9 +7,15 @@ caches/
 **/node_modules/
 gateway/dist/
 .env
+.env.*
+!.env.example
 data/
 .local/
+*.apk
+*.apks
+*.log
 *.jks
+*.p12
 *.secret
 *.keystore
 *.sqlite

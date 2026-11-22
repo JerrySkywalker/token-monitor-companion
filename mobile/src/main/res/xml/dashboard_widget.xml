@@ -1,0 +1,13 @@
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="125dp"
+    android:minHeight="105dp"
+    android:minResizeWidth="125dp"
+    android:minResizeHeight="105dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:configure="io.github.jerryskywalker.tmcomp.mobile.WidgetConfigurationActivity"
+    android:widgetCategory="home_screen"
+    android:widgetFeatures="reconfigurable" />

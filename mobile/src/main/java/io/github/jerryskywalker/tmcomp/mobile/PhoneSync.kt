@@ -1,7 +1,8 @@
 package io.github.jerryskywalker.tmcomp.mobile
 
 import android.content.Context
-import android.os.Build
+import android.util.Log
+import androidx.glance.appwidget.updateAll
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -11,6 +12,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.WearableListenerService
 import io.github.jerryskywalker.tmcomp.core.*
@@ -20,8 +22,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
+
+internal const val PHONE_VIEW_KEY = "hub_phone_view"
+private const val LINK_PREFIX = "hub_link_"
 
 @Serializable
 data class WatchLink(val binding: String, val node: String)
@@ -33,145 +36,149 @@ data class PhoneState(
     val available: List<DiscoveredWatch> = emptyList(),
     val connected: List<String> = emptyList(),
     val usageError: String? = null,
+    val wearAvailable: Boolean? = null,
 )
 
 @Serializable
-data class DiscoveredWatch(val id: String, val label: String, val node: String)
+data class DiscoveredWatch(val id: String, val label: String, val node: String, val initial: WatchConfig? = null)
 
 class PhoneSync(context: Context) {
     private val context = context.applicationContext
     val storage = DeviceStorage(context)
     private val transport = Transport(context)
-    fun state() = storage.read<PhoneState>("view") ?: PhoneState()
-    fun link(id: String) = storage.read<WatchLink>("link_" + id)
-    private fun save(value: PhoneState) = storage.write("view", value)
-    private fun creds() = requireNotNull(storage.credentials()) { "请先配对服务器" }
+    fun state() = storage.read<PhoneState>(PHONE_VIEW_KEY) ?: PhoneState()
+    private fun link(id: String) = storage.read<WatchLink>(LINK_PREFIX + id)
 
-    suspend fun enroll(pair: PairCode) = mutex.withLock {
-        val previous = storage.credentials()?.origin
-        val credentials = Gateway(pair.url).enroll(pair.code, "phone", Build.MODEL.take(70))
-        if (previous != credentials.origin) clearLinks()
-        storage.saveCredentials(credentials)
-        save(PhoneState())
-        schedule(context)
-        refreshLocked(credentials)
-    }
-
-    suspend fun refresh() = mutex.withLock {
-        val credentials = storage.credentials() ?: return@withLock
-        refreshLocked(credentials)
-    }
-
-    private suspend fun refreshLocked(credentials: Credentials) {
-        val api = credentials.gateway()
+    private suspend fun save(value: PhoneState) {
         val previous = state()
-        val nodes = attempt { transport.connectedNodes() }.getOrDefault(emptySet())
-        val packets = attempt { transport.items(FROM_WATCH) }.getOrDefault(emptyList()).mapNotNull { item ->
+        if (previous == value) return
+        storage.write(PHONE_VIEW_KEY, value)
+        if (previous.snapshot != value.snapshot || previous.usageError != value.usageError) {
+            attempt { DashboardWidget().updateAll(context) }
+        }
+    }
+
+    suspend fun connect(credentials: HubConnection) = mutex.withLock {
+        val previous = state()
+        val old = storage.credentials()
+        val snapshot = Hub(credentials).snapshot(previous.snapshot.takeIf { old?.origin == credentials.origin })
+        storage.saveCredentials(credentials)
+        save(previous.copy(snapshot = snapshot, usageError = null))
+        schedule(context)
+        syncWatches()
+    }
+
+    suspend fun refresh() = mutex.withLock { refreshLocked() }
+
+    private suspend fun refreshLocked() {
+        val credentials = storage.credentials()
+        val previous = state()
+        val usage = credentials?.let { attempt { Hub(it).snapshot(previous.snapshot) } }
+        if (usage != null) {
+            save(previous.copy(snapshot = usage.getOrNull() ?: previous.snapshot, usageError = usage.exceptionOrNull()?.message))
+        }
+        syncWatches()
+        usage?.getOrThrow()
+    }
+
+    suspend fun discover() = mutex.withLock { syncWatches() }
+
+    private suspend fun syncWatches() {
+        val previous = state()
+        val peers = attempt { transport.connectedNodes() }
+        val inbox = attempt { transport.items(FROM_WATCH) }
+        val nodes = peers.getOrDefault(emptySet())
+        val packets = inbox.getOrDefault(emptyList()).mapNotNull { item ->
             val message = runCatching { wireJson.decodeFromString<WatchPacket>(item.body) }.getOrNull() ?: return@mapNotNull null
             if (item.path != FROM_WATCH + message.id || !idPattern.matches(message.id)) return@mapNotNull null
             item.node to message
         }
-        val knownWatches = api.watches()
-        val reports = knownWatches.associate { it.id to (it.report?.sequence ?: 0L) }
-        val watched = knownWatches.associateBy { it.id }.toMutableMap()
-        for ((node, message) in packets) {
-            val link = link(message.id) ?: continue
-            val report = message.report ?: continue
-            if (node != link.node || message.binding != link.binding || reports[message.id] == null) continue
-            if (report.sequence > reports.getValue(message.id)) {
-                watched[message.id] = api.relayReport(message.id, report)
-            }
+        if (BuildConfig.DEBUG) Log.d("TmCompDataLayer",
+            "Connected nodes=${nodes.size}, watch items=${packets.size}, " +
+                "node error=${dataLayerError(peers.exceptionOrNull())}, inbox error=${dataLayerError(inbox.exceptionOrNull())}")
+        val watches = previous.watches.map { watch ->
+            val link = link(watch.id) ?: return@map watch
+            val latest = packets.asSequence().filter { (node, packet) ->
+                node == link.node && packet.id == watch.id && link.binding == packet.binding
+            }.mapNotNull { it.second.report }.filter {
+                it.sequence > (watch.report?.sequence ?: 0L) && it.appliedVersion <= watch.version
+            }.maxByOrNull { it.sequence }
+            watch.copy(report = latest ?: watch.report,
+                ringProvider = if (latest?.appliedVersion == watch.version) latest.ringProvider else watch.ringProvider)
         }
-        val usage = attempt { api.usage() }
-        if (usage.exceptionOrNull().let { it is GatewayException && it.status == 401 }) throw usage.exceptionOrNull()!!
-        val snapshot = usage.getOrNull() ?: previous.snapshot
-        val delivered = if (usage.isSuccess) snapshot else snapshot?.copy(stale = true)
-        val available = packets.filter { (node, packet) -> node in nodes && link(packet.id) == null }
-            .map { (node, packet) -> DiscoveredWatch(packet.id, packet.label.take(70), node) }.distinctBy { it.id }
-        val watches = watched.values.toList()
-        save(PhoneState(snapshot, watches, available, watches.filter { link(it.id)?.node in nodes }.map { it.id },
-            usage.exceptionOrNull()?.message))
+        val available = packets.filter { (node, packet) -> node in nodes && packet.binding == null && link(packet.id) == null }
+            .map { (node, packet) -> DiscoveredWatch(packet.id, packet.label.take(70), node, packet.initial) }.distinctBy { it.id }
+        val delivered = previous.snapshot?.let { if (previous.usageError == null) it else it.copy(stale = true) }
+        save(previous.copy(watches = watches, available = available,
+            connected = watches.filter { link(it.id)?.node in nodes }.map { it.id },
+            wearAvailable = peers.isSuccess && inbox.isSuccess))
         for (watch in watches) {
-            val link = link(watch.id) ?: continue
-            attempt { send(watch, link, credentials.origin, delivered) }
+            val connection = link(watch.id) ?: continue
+            attempt { send(watch, connection, delivered) }
         }
     }
 
     suspend fun bind(device: DiscoveredWatch) = mutex.withLock {
         require(device.node in transport.connectedNodes()) { "请让手表保持连接并打开应用" }
-        val credentials = creds()
-        val watch = credentials.gateway().register(device.id, device.label)
-        val link = WatchLink(UUID.randomUUID().toString(), device.node)
-        storage.write("link_" + device.id, link)
-        send(watch, link, credentials.origin, state().snapshot)
-        refreshLocked(credentials)
+        val previous = state()
+        if (previous.watches.any { it.id == device.id }) return@withLock
+        val initial = device.initial
+        val watch = WatchConfig(device.id, device.label, mode = initial?.mode ?: Mode.PHONE,
+            pinnedId = initial?.pinnedId, paused = initial?.paused ?: false,
+            refreshMinutes = initial?.refreshMinutes?.coerceIn(15, 1440) ?: 30,
+            ringProvider = initial?.ringProvider)
+        val connection = WatchLink(UUID.randomUUID().toString(), device.node)
+        storage.write(LINK_PREFIX + device.id, connection)
+        save(previous.copy(watches = previous.watches + watch,
+            available = previous.available.filterNot { it.id == device.id }, connected = previous.connected + device.id))
+        send(watch, connection, previous.snapshot?.let { if (previous.usageError == null) it else it.copy(stale = true) })
     }
 
-    suspend fun edit(watch: WatchConfig, desired: WatchConfig): PairCode? = mutex.withLock {
-        val credentials = creds()
-        val api = credentials.gateway()
-        val updated = try {
-            api.update(watch.id, desired.edit(watch))
-        } catch (error: GatewayException) {
-            if (error.status == 409) refreshLocked(credentials)
-            throw error
+    suspend fun edit(watch: WatchConfig, desired: WatchConfig) = mutex.withLock {
+        val current = state()
+        val active = current.watches.firstOrNull { it.id == watch.id } ?: error("手表已移除")
+        require(active.version == watch.version) { "手表设置已更新，请重试" }
+        val connection = requireNotNull(link(watch.id)) { "请先绑定手表" }
+        val updated = desired.copy(version = active.version + 1, report = active.report)
+        save(current.copy(watches = current.watches.map { if (it.id == watch.id) updated else it }))
+        if (updated.mode == Mode.PHONE && !updated.paused && updated.refreshRequest != active.refreshRequest) {
+            refreshLocked()
+        } else {
+            val snapshot = current.snapshot?.let { if (current.usageError == null) it else it.copy(stale = true) }
+            send(updated, connection, snapshot)
         }
-        val local = state()
-        var snapshot = local.snapshot
-        var usageError = local.usageError
-        if (updated.mode == Mode.PHONE && !updated.paused && updated.refreshRequest != watch.refreshRequest) {
-            val current = attempt { api.usage() }
-            snapshot = current.getOrNull() ?: snapshot?.copy(stale = true)
-            usageError = current.exceptionOrNull()?.message
-        }
-        save(local.copy(snapshot = snapshot, usageError = usageError,
-            watches = local.watches.map { if (it.id == updated.id) updated else it }))
-        val link = link(watch.id)
-        if (link != null) attempt { send(updated, link, credentials.origin, snapshot) }
-        if (updated.mode == Mode.DIRECT && watch.mode == Mode.PHONE) issueInvite(updated, credentials) else null
     }
 
-    suspend fun invite(watch: WatchConfig): PairCode = mutex.withLock { issueInvite(watch, creds()) }
+    suspend fun configureWatchHub(watch: WatchConfig, credentials: HubConnection) = mutex.withLock {
+        val connection = requireNotNull(link(watch.id)) { "请先绑定手表" }
+        require(connection.node in transport.connectedNodes()) { "等待手表连接后再设置 Hub" }
+        val reply = transport.configureHub(connection.node, WatchHubSetup(watch.id, connection.binding, credentials))
+        require(reply.origin == credentials.origin) { reply.error ?: "手表未确认 Hub 配置" }
+        syncWatches()
+    }
 
-    private suspend fun issueInvite(watch: WatchConfig, credentials: Credentials): PairCode {
-        val pair = credentials.gateway().invite(watch.id).copy(url = credentials.origin)
-        val link = link(watch.id)
-        if (link != null) attempt { transport.sendInvite(link.node, DirectInvite(watch.id, link.binding, pair)) }
-        return pair
+    suspend fun configureWatchWithPhoneHub(watch: WatchConfig) {
+        configureWatchHub(watch, requireNotNull(storage.credentials()) { "请先配置手机的 Hub" })
     }
 
     suspend fun remove(watch: WatchConfig) = mutex.withLock {
-        val credentials = creds()
-        credentials.gateway().remove(watch.id)
-        link(watch.id)?.let {
-            attempt { send(watch, it, credentials.origin, null, detached = true) }
-        }
-        storage.write<WatchLink>("link_" + watch.id, null)
+        link(watch.id)?.let { send(watch, it, null, detached = true) }
+        storage.write<WatchLink>(LINK_PREFIX + watch.id, null)
         val local = state()
-        save(local.copy(watches = local.watches.filterNot { it.id == watch.id }, available = local.available.filterNot { it.id == watch.id }))
+        save(local.copy(watches = local.watches.filterNot { it.id == watch.id },
+            available = local.available.filterNot { it.id == watch.id }, connected = local.connected - watch.id))
     }
 
     suspend fun clear() = mutex.withLock {
         storage.saveCredentials(null)
-        clearLinks()
-        save(PhoneState())
+        save(state().copy(snapshot = null, usageError = null))
         WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_NAME)
+        syncWatches()
     }
 
-    private fun clearLinks() {
-        val editor = storage.preferences.edit()
-        storage.preferences.all.keys.filter { it.startsWith("link_") }.forEach { editor.remove(it) }
-        editor.apply()
-    }
-
-    private suspend fun send(watch: WatchConfig, link: WatchLink, origin: String, snapshot: Snapshot?, detached: Boolean = false) {
-        val payload = PhonePacket(
-            binding = link.binding,
-            origin = origin,
-            config = watch.copy(report = null),
-            snapshot = snapshot?.takeIf { !detached && watch.mode == Mode.PHONE && !watch.paused }?.forWatch(watch.pinnedId),
-            detached = detached,
-        )
+    private suspend fun send(watch: WatchConfig, link: WatchLink, snapshot: Snapshot?, detached: Boolean = false) {
+        val payload = PhonePacket(link.binding, storage.credentials()?.origin.orEmpty(), watch.copy(report = null),
+            snapshot?.takeIf { !detached && watch.mode == Mode.PHONE && !watch.paused }?.forWatch(watch.pinnedId), detached)
         transport.send(FROM_PHONE + watch.id, wireJson.encodeToString(payload))
     }
 
@@ -187,11 +194,15 @@ class PhoneSync(context: Context) {
         }
 
         fun enqueue(context: Context) {
-            val request = OneTimeWorkRequestBuilder<PhoneWorker>().setConstraints(network).build()
+            val request = OneTimeWorkRequestBuilder<PhoneWearWorker>().build()
             WorkManager.getInstance(context).enqueueUniqueWork("phone-wear-event", ExistingWorkPolicy.APPEND_OR_REPLACE, request)
         }
     }
 }
+
+private fun dataLayerError(error: Throwable?) =
+    if (error is ApiException) error.message?.take(240) ?: "ApiException(${error.statusCode})"
+    else error?.javaClass?.simpleName
 
 private suspend inline fun <T> attempt(block: () -> T): Result<T> = try {
     Result.success(block())
@@ -203,10 +214,16 @@ private suspend inline fun <T> attempt(block: () -> T): Result<T> = try {
 
 class PhoneWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
-        val outcome = attempt { PhoneSync(applicationContext).refresh() }
-        val error = outcome.exceptionOrNull()
-        return if (error == null || (error is GatewayException && error.status in 400..499)) Result.success()
+        val error = attempt { PhoneSync(applicationContext).refresh() }.exceptionOrNull()
+        return if (error == null || (error is HubException && error.status in 400..499)) Result.success()
         else if (runAttemptCount < 3) Result.retry() else Result.failure()
+    }
+}
+
+class PhoneWearWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
+    override suspend fun doWork(): Result {
+        PhoneSync(applicationContext).discover()
+        return Result.success()
     }
 }
 

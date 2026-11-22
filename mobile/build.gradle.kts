@@ -29,6 +29,8 @@ dependencies {
     implementation(project(":core"))
     implementation(platform("androidx.compose:compose-bom:2025.09.01"))
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.glance:glance-appwidget:1.1.1")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    testImplementation("junit:junit:4.13.2")
 }

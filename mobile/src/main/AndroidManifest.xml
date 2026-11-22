@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:label="Token Monitor" android:allowBackup="false" android:dataExtractionRules="@xml/companion_data_extraction"
         android:usesCleartextTraffic="false"
@@ -10,10 +11,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".WidgetConfigurationActivity" android:exported="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" /></intent-filter>
+        </activity>
+        <receiver android:name=".DashboardWidgetReceiver" android:label="Token Monitor 看板" android:exported="false">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/dashboard_widget" />
+        </receiver>
         <service android:name=".PhoneListener" android:exported="true">
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
-                <data android:scheme="wear" android:host="*" android:pathPrefix="/tmcomp/v1/watch/" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/tmcomp/v2/watch/" />
             </intent-filter>
         </service>
     </application>

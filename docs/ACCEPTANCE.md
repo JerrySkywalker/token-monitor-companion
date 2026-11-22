@@ -1,24 +1,16 @@
-# MVP 本地验收记录
+# 本地验收记录
 
-2026-11-22 在 SKYFORGE-01 执行。构建使用 JDK 17、Gradle Wrapper 8.14.5、Android SDK Platform 36、Build Tools 36.0.0 和 Node.js。模拟器为 Android Emulator 37.4.1，使用 WHPX，手机和手表镜像均为 API 35。所有测试及 APK 构建在本机完成。
+## v0.1.0 Android 与 Wear OS
 
 | 验收项 | 结果 |
 | --- | --- |
-| 网关合同测试 | 6 项通过，覆盖配对码过期与重放、设备权限、配置版本、暂停、撤销和缓存降级 |
-| Android 单元测试和 Lint | Kotlin 3 项通过，手机和手表 Lint 无错误 |
-| Android 构建 | 手机和手表的 Debug 与未签名 Release APK 均生成，Debug APK 使用相同应用 ID 和签名 |
-| 容器 | Linux 镜像启动后，HTTP 健康检查、发码、手机入网及返回用量通过 |
-| 手机扫码 | AVD 的模拟相机实际读取配对 QR，显示 Codex 62% 和今日 1,264,020 tokens |
-| 手表独立直连 | Wear AVD 手输一次性码后显示 Codex 41% 和 OpenRouter USD 12.34，关闭手机 AVD 后表上刷新取得较新的快照 |
-| 手机控制直连表 | 手机暂停后收到了 v1 已暂停回执。恢复同步并置顶 OpenRouter 后，手表调整显示顺序，手机收到了 v3 已同步回执。手机发起刷新后收到了 v4 已同步回执 |
-| 断网与恢复 | Wear AVD 开启飞行模式后保留上次余额并显示连接失败。恢复网络并重新打开应用后刷新成功 |
-| Wear OS 系统配对 | 手机 AVD 安装 Google Pixel Watch 5.1 后完成系统配对。ADB 在手机 `emulator-5570` 和手表 `emulator-5572` 上均返回对方已连接 |
-| Data Layer 设备发现 | 手机应用发现 `sdk_gwear_x86_64`，绑定后显示「手机连接在线」 |
-| Data Layer 用量转发 | 切到「手机同步 · v5」后，手表显示 Codex 周额度剩余 41% 和 OpenRouter 余额 12.34 USD |
-| Data Layer 手表回执 | 保持手机同步模式，只在手机发起刷新。手表更新快照并返回 `PHONE v6 READY`，手机显示「状态 · 已同步 · v6」 |
-| 双向模式切换 | `DIRECT v4 → PHONE v5 → DIRECT v7` 通过。切回独立直连时复用此前的手表授权，手表读取新快照并返回 `DIRECT v7 READY` |
-| 真机 | eSIM 和厂商后台运行待在后续真机环境测量 |
+| 手机直连 | 真机通过 HTTPS 直接读取真实 Token Monitor Hub 的额度和用量。 |
+| 扫码导入 | 在同一 Wi‑Fi 下，使用手机扫描手表的一次性配对码。手表验证手机发送的 Hub 配置后，手机收到确认，手表进入独立直连。 |
+| 手表独立直连 | 关闭手表蓝牙并停止手机 App 后，手表通过自身 Wi‑Fi 刷新成功。电脑完全关机后，设备操作者再手动刷新并确认「本机取数」继续前进。使用真实 Hub，无需 ADB 转发或 Companion Server。 |
+| 手机推送、远程 Hub 设置和模式切换 | 已系统配对的手机和手表模拟器通过 Hub 测试数据验证发现、用量转发、远程 Hub 设置和回执。测得两种模式可互相切换。这些 Data Layer 项目未在本轮真机环境复验，手机的 Wearable API 不可用。 |
+| 扫码协议 | 本地测试覆盖二维码解析、拒绝消息篡改与重放，以及同一个配对码只接受一次有效发送。手机模拟器打开扫码相机，手表模拟器显示二维码。 |
+| 本地 CI | 10 项 Kotlin 测试、两端 Lint、Debug 和 Release APK 构建通过。 |
 
-本次配对时 Wear AVD 尝试连接宿主机的 5601 端口。补齐手机 AVD 的本地 ADB 端口转发后，系统配对成功。应用验收和构建都在本机完成，未使用 GitHub Actions。
+设备明细、运行日志和截图保存在测试设备操作者的本地环境。
 
-各客户端读到的均是本地网关的合成数据。手机扫码通过临时测试 AVD 的模拟相机完成。两种 Android 构建和网关测试可通过 scripts/local-ci.ps1 重跑。模拟器截图、UI 断言与 CI 日志保存在本机 .local/evidence。操作步骤见 [模拟器验收](AVD.md)。[Android Studio 的 Wear 配对要求](https://developer.android.com/training/wearables/get-started/connect-phone)
+复验步骤见 [模拟器验收方法](AVD.md)。

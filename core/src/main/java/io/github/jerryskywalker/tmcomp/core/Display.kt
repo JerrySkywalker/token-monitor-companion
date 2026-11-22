@@ -8,6 +8,14 @@ import java.time.format.DateTimeFormatter
 
 fun displayNumber(value: Number?) = value?.let { NumberFormat.getNumberInstance().apply { maximumFractionDigits = 2 }.format(it) } ?: "—"
 
+fun displayCompactTokens(value: Long?): String = when {
+    value == null -> "—"
+    value >= 1_000_000_000 -> displayNumber(value / 1_000_000_000.0) + "B"
+    value >= 1_000_000 -> displayNumber(value / 1_000_000.0) + "M"
+    value >= 1_000 -> displayNumber(value / 1_000.0) + "K"
+    else -> displayNumber(value)
+}
+
 fun Reading.title() = listOfNotNull(provider, account, label).joinToString(" · ")
 
 fun Reading.value() = when {
