@@ -1,0 +1,16 @@
+.gradle/
+.kotlin/
+.idea/
+**/build/
+local.properties
+caches/
+**/node_modules/
+gateway/dist/
+.env
+data/
+.local/
+*.jks
+*.secret
+*.keystore
+*.sqlite
+*.sqlite-*

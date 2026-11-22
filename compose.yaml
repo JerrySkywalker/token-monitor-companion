@@ -1,0 +1,20 @@
+services:
+  gateway:
+    build: ./gateway
+    restart: unless-stopped
+    ports:
+      - "${COMPANION_BIND:-127.0.0.1}:8787:8787"
+    environment:
+      HUB_URL: ${HUB_URL:-}
+      HUB_ALLOW_INSECURE: ${HUB_ALLOW_INSECURE:-0}
+      HUB_SECRET_FILE: /run/secrets/hub_secret
+      PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL to the gateway HTTPS address}
+    secrets:
+      - hub_secret
+    volumes:
+      - companion-data:/data
+secrets:
+  hub_secret:
+    file: ${HUB_SECRET_PATH:?Set HUB_SECRET_PATH to a readable secret file}
+volumes:
+  companion-data:

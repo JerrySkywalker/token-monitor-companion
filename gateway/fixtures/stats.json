@@ -1,0 +1,24 @@
+{
+  "updatedAt": "2026-11-22T00:00:00.000Z",
+  "periods": {
+    "today": { "totalTokens": 1264020, "costUsd": 1.7283 },
+    "month": { "totalTokens": 74046012, "costUsd": 38.2981 }
+  },
+  "limits": {
+    "providers": [
+      {
+        "provider": "codex", "accountKey": "demo-codex", "accountName": "Personal", "status": "ok",
+        "windows": [
+          { "kind": "session", "label": "5-hour", "remainingPercent": 62 },
+          { "kind": "weekly", "label": "Weekly", "remainingPercent": 41 }
+        ]
+      },
+      {
+        "provider": "openrouter", "accountKey": "demo-or", "status": "ok",
+        "windows": [
+          { "kind": "billing", "label": "API balance", "metric": "credits", "remaining": 12.34, "currency": "USD" }
+        ]
+      }
+    ]
+  }
+}
