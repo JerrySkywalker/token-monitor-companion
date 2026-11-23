@@ -31,12 +31,8 @@ internal enum class QuotaLayout(val label: String) {
 
 @Composable
 internal fun QuotaScreen(snapshot: Snapshot?, stale: Boolean, kind: String, layout: QuotaLayout, order: List<String>,
-    subscriptions: SubscriptionState?, onOrder: () -> Unit, onAccount: (String) -> Unit, onKind: (String) -> Unit) {
+    subscriptions: SubscriptionState?, onAccount: (String) -> Unit, onKind: (String) -> Unit) {
     val accounts = snapshot.quotaOrder(kind, order)
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        PageTitle("额度与余额", Modifier.weight(1f))
-        if (kind != "subscriptions") TextButton(onOrder, enabled = accounts.size > 1) { Text("调整顺序") }
-    }
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
         val tabs = listOf("quota" to "额度", "balance" to "余额", "spend" to "支出", "subscriptions" to "订阅")
         tabs.forEachIndexed { index, (key, label) ->

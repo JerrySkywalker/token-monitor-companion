@@ -7,7 +7,6 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.Image
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -165,6 +164,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     fun back() {
         screen = when (screen) {
             "tool" -> "tools"
+            "editor", "overviewRanges", "favorites" -> if (tab == 4) "overviewSettings" else ""
             "watch" -> "wear"
             "watchHub" -> watchHubParent
             "watchDisplay" -> watchDisplayParent
@@ -271,7 +271,10 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     val icons = listOf(R.drawable.nav_home, R.drawable.nav_quota, R.drawable.nav_activity, R.drawable.settings_watch, R.drawable.nav_settings)
     val scroll = rememberScrollState()
     val inSettings = credentials != null && tab == 4
-    val settingsTitle = when (screen) {
+    val detailTitle = when (screen) {
+        "overviewSettings" -> "总览设置"
+        "appearance" -> "外观与图表"
+        "about" -> "关于"
         "editor" -> "编辑总览"
         "overviewRanges" -> "总览时间筛选"
         "quotaLayout" -> "额度页布局"
@@ -293,8 +296,31 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     val activityRoot = credentials != null && screen.isEmpty() && tab == 2
     val overview = credentials != null && screen.isEmpty() && tab == 0
     val compactOverview = overview && overviewLayout == OverviewLayout.COMPACT
+    val title = when {
+        credentials == null -> "连接 Token Monitor Hub"
+        detailTitle != null -> detailTitle
+        else -> listOf("Token Monitor", "额度与余额", "活动", "设备", "设置")[tab]
+    }
     LaunchedEffect(tab, screen) { scroll.scrollTo(0) }
-    Scaffold(topBar = { settingsTitle?.let { SettingsTopBar(it, ::back) } }, bottomBar = {
+    Scaffold(topBar = {
+        PhoneTopBar(title, onBack = if (detailTitle == null) null else ::back) {
+            when {
+                overview -> {
+                    TextButton(::checkConnection, enabled = !busy, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text("刷新")
+                    }
+                    TextButton({ screen = "editor" }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                        Text("编辑总览")
+                    }
+                }
+                activityRoot -> ActivityDevicePicker(snapshot, activityScope.device) { collector = it }
+                credentials != null && screen.isEmpty() && tab == 1 && limitKind != "subscriptions" -> {
+                    val canSort = remember(snapshot, limitKind) { snapshot.quotaOrder(limitKind, emptyList()).size > 1 }
+                    TextButton({ screen = "quotaOrder" }, enabled = canSort) { Text("调整顺序") }
+                }
+            }
+        }
+    }, bottomBar = {
         if (credentials != null && screen.isEmpty()) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
             tabs.forEachIndexed { index, label ->
                 NavigationBarItem(selected = tab == index, onClick = { tab = index }, icon = { SettingsIcon(icons[index]) },
@@ -302,22 +328,14 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
             }
         }
     }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 15.dp).verticalScroll(scroll),
-            verticalArrangement = Arrangement.spacedBy(if (compactQuota || compactOverview) 5.dp else 10.dp)) {
-            Spacer(Modifier.height(if (compactOverview || compactQuota || activityRoot) 2.dp else 6.dp))
-            if (overview) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Image(painterResource(io.github.jerryskywalker.tmcomp.core.R.drawable.tmcomp_logo), null,
-                        Modifier.padding(end = 6.dp).size(24.dp))
-                    PageTitle("Token Monitor", Modifier.weight(1f))
-                    TextButton(::checkConnection, enabled = !busy, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("刷新") }
-                    TextButton({ screen = "editor" }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("编辑总览") }
-                }
-            }
+        Column(
+            Modifier.fillMaxSize().padding(padding).verticalScroll(scroll)
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compactQuota || compactOverview) 5.dp else 10.dp),
+        ) {
             if (busy && !inSettings && !activityRoot) LinearProgressIndicator(Modifier.fillMaxWidth())
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (credentials == null) {
-                PageTitle("连接 Token Monitor Hub")
                 HubForm(startAddress = "", busy = busy, submit = "连接 Hub") { address, secret ->
                     act {
                         sync.connect(hubConnection(address, secret, BuildConfig.DEBUG))
@@ -326,16 +344,37 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                 }
             } else {
                 when (screen) {
+                    "overviewSettings" -> OverviewSettings(
+                        overviewLayout,
+                        onLayout = { next ->
+                            sync.storage.write(OVERVIEW_LAYOUT_KEY, next)
+                            overviewLayout = next
+                        },
+                        onCards = { screen = "editor" },
+                        onRanges = { screen = "overviewRanges" },
+                        onFavorites = { screen = "favorites" },
+                    )
+                    "appearance" -> AppearanceSettings(theme, candleColors,
+                        onTheme = {
+                            setTheme(it)
+                            refreshWidgets()
+                        },
+                        onCandleColors = { next ->
+                            sync.storage.write(CANDLE_COLORS, next)
+                            candleColors = next
+                            refreshWidgets()
+                        })
+                    "about" -> AboutSettings()
                     "editor" -> EditOverview(layout, { next ->
                         sync.storage.write(OVERVIEW_QUEUE_KEY, next)
                         layout = next
-                        screen = ""
-                    }, { screen = "" })
+                        back()
+                    }, ::back)
                     "overviewRanges" -> EditOverviewRanges(pinnedRanges, { next ->
                         sync.storage.write(OVERVIEW_RANGES_KEY, next)
                         if (dashboardScope.range !in next) range = next.first().name
                         pinnedRanges = next
-                        screen = ""
+                        back()
                     }, ::back)
                     "favorites" -> EditFavoriteQuotas(snapshot, favorites, favoriteDisplay) { next, display ->
                         sync.storage.write(FAVORITE_QUOTAS_KEY, next)
@@ -343,7 +382,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                         favorites = next
                         favoriteDisplay = display
                         refreshWidgets()
-                        screen = ""
+                        back()
                     }
                     "collectors" -> CollectorSettings(snapshot, collectorDisplay) { next ->
                         sync.storage.write(COLLECTOR_DISPLAY, next)
@@ -498,7 +537,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                             }
                         }
                         1 -> QuotaScreen(snapshot, stale, limitKind, quotaLayout, quotaOrders[limitKind].orEmpty(),
-                            state.subscriptions, onOrder = { screen = "quotaOrder" },
+                            state.subscriptions,
                             onAccount = { id -> quotaAccountId = id; screen = "quotaDetail" }) { limitKind = it }
                         2 -> ActivityScreen(snapshot, activityScope, pinnedRanges, trendStyle,
                             trendIntervals.forRange(activityScope.range), candleColors,
@@ -522,35 +561,23 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                             screen = "wear"
                         })
                         else -> SettingsHome(credentials?.origin.orEmpty(), hubReachable, quotaLayout,
-                            overviewLayout = overviewLayout, onOverviewLayout = { next ->
-                                sync.storage.write(OVERVIEW_LAYOUT_KEY, next)
-                                overviewLayout = next
-                            }, watchCount = state.watches.size,
+                            overviewLayout = overviewLayout, theme = theme, watchCount = state.watches.size,
                             onServer = { screen = "server" },
-                            onOverview = { screen = "editor" },
-                            onRanges = { screen = "overviewRanges" },
-                            theme = theme, onTheme = {
-                                setTheme(it)
-                                refreshWidgets()
-                            },
-                            onFavorites = { screen = "favorites" },
+                            onOverview = { screen = "overviewSettings" },
                             onQuotaLayout = { screen = "quotaLayout" },
-                            candleColors = candleColors, onCandleColors = { next ->
-                                sync.storage.write(CANDLE_COLORS, next)
-                                candleColors = next
-                                refreshWidgets()
-                            }, collectorLayout = collectorDisplay.layout, onCollectors = { screen = "collectors" },
+                            onAppearance = { screen = "appearance" },
+                            collectorLayout = collectorDisplay.layout,
+                            onCollectors = { screen = "collectors" },
                             onWidget = {
                                 if (!requestOverviewWidget(context)) {
                                     Toast.makeText(context, "请从主屏幕的小工具面板添加", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            onWear = { screen = "wear" })
+                            onWear = { screen = "wear" },
+                            onAbout = { screen = "about" })
                     }
                 }
             }
-
-            Spacer(Modifier.height(10.dp))
         }
     }
     val hub = credentials

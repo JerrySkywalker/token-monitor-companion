@@ -35,41 +35,31 @@ internal fun SettingsHome(
     reachable: Boolean?,
     quotaLayout: QuotaLayout,
     overviewLayout: OverviewLayout,
-    onOverviewLayout: (OverviewLayout) -> Unit,
+    theme: AppTheme,
     watchCount: Int,
     onServer: () -> Unit,
     onOverview: () -> Unit,
-    onRanges: () -> Unit,
-    theme: AppTheme,
-    onTheme: (AppTheme) -> Unit,
-    onFavorites: () -> Unit,
     onQuotaLayout: () -> Unit,
-    candleColors: CandleColors,
-    onCandleColors: (CandleColors) -> Unit,
+    onAppearance: () -> Unit,
     collectorLayout: CollectorLayout,
     onCollectors: () -> Unit,
     onWidget: () -> Unit,
     onWear: () -> Unit,
+    onAbout: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        PageTitle("设置")
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         ServerConnectionCard(origin.substringAfter("://"), reachable, onServer)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SettingsHeading("显示与桌面")
             SettingsGroup {
-                ChoiceSetting("外观", theme, AppTheme.entries, { it.label }, onTheme)
+                SettingRow("总览", "布局、卡片、时间筛选和关注额度", R.drawable.nav_home,
+                    value = overviewLayout.label, onClick = onOverview)
                 SettingsDivider()
-                ChoiceSetting("总览布局", overviewLayout, OverviewLayout.entries, { it.label }, onOverviewLayout)
+                SettingRow("额度与余额", "额度页布局", R.drawable.nav_quota,
+                    value = quotaLayout.label, onClick = onQuotaLayout)
                 SettingsDivider()
-                SettingRow("编辑总览", "展示队列和卡片顺序", R.drawable.settings_grid, onClick = onOverview)
-                SettingsDivider()
-                SettingRow("关注额度", "选择具体工具、账号和限制窗口", R.drawable.nav_quota, onClick = onFavorites)
-                SettingsDivider()
-                SettingRow("总览时间筛选", "最多固定 4 个常用范围", R.drawable.settings_grid, onClick = onRanges)
-                SettingsDivider()
-                SettingRow("额度页布局", icon = R.drawable.settings_layout, value = quotaLayout.label, onClick = onQuotaLayout)
-                SettingsDivider()
-                ChoiceSetting("K 线涨跌颜色", candleColors, CandleColors.entries, { it.label }, onCandleColors)
+                SettingRow("外观与图表", "主题和 K 线涨跌颜色", R.drawable.settings_layout,
+                    value = theme.label, onClick = onAppearance)
                 SettingsDivider()
                 SettingRow("桌面小工具", "添加到主屏幕", R.drawable.settings_widget, onClick = onWidget)
             }
@@ -83,6 +73,43 @@ internal fun SettingsHome(
                     R.drawable.settings_watch, onClick = onWear)
             }
         }
+        SettingsGroup {
+            SettingRow("关于", "开源项目、鸣谢与检查更新", R.drawable.settings_info,
+                value = "v${BuildConfig.VERSION_NAME}", onClick = onAbout)
+        }
+    }
+}
+
+@Composable
+internal fun OverviewSettings(
+    layout: OverviewLayout,
+    onLayout: (OverviewLayout) -> Unit,
+    onCards: () -> Unit,
+    onRanges: () -> Unit,
+    onFavorites: () -> Unit,
+) {
+    SettingsGroup {
+        ChoiceSetting("总览布局", layout, OverviewLayout.entries, { it.label }, onLayout)
+        SettingsDivider()
+        SettingRow("编辑总览", "添加、移除和拖动卡片", R.drawable.settings_grid, onClick = onCards)
+        SettingsDivider()
+        SettingRow("总览时间筛选", "最多固定 4 个常用范围", onClick = onRanges)
+        SettingsDivider()
+        SettingRow("关注额度", "选择限制窗口、显示样式和统计口径", R.drawable.nav_quota, onClick = onFavorites)
+    }
+}
+
+@Composable
+internal fun AppearanceSettings(
+    theme: AppTheme,
+    candleColors: CandleColors,
+    onTheme: (AppTheme) -> Unit,
+    onCandleColors: (CandleColors) -> Unit,
+) {
+    SettingsGroup {
+        ChoiceSetting("外观", theme, AppTheme.entries, { it.label }, onTheme)
+        SettingsDivider()
+        ChoiceSetting("K 线涨跌颜色", candleColors, CandleColors.entries, { it.label }, onCandleColors)
     }
 }
 
@@ -100,12 +127,17 @@ internal fun PageTitle(title: String, modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun SettingsTopBar(title: String, onBack: () -> Unit) {
+internal fun PhoneTopBar(
+    title: String,
+    onBack: (() -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
     TopAppBar(
         title = { PageTitle(title) },
         navigationIcon = {
-            IconButton(onBack) { SettingsIcon(R.drawable.settings_back, "返回") }
+            if (onBack != null) IconButton(onBack) { SettingsIcon(R.drawable.settings_back, "返回") }
         },
+        actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
     )
 }

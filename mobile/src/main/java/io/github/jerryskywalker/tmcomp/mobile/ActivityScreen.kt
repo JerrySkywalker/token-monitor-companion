@@ -15,6 +15,14 @@ import io.github.jerryskywalker.tmcomp.core.*
 import java.time.Instant
 import kotlinx.coroutines.delay
 
+@Composable
+internal fun ActivityDevicePicker(snapshot: Snapshot?, device: String?, onDevice: (String?) -> Unit) {
+    val devices = snapshot?.collectors.orEmpty()
+    val options: List<String?> = listOf(null) + devices.map { it.key }
+    val label: (String?) -> String = { key -> devices.firstOrNull { it.key == key }?.label ?: "所有设备" }
+    CompactChoice(label(device), options, label, onDevice)
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ActivityScreen(snapshot: Snapshot?, scope: DashboardScope, pinned: List<Range>,
@@ -30,14 +38,6 @@ internal fun ActivityScreen(snapshot: Snapshot?, scope: DashboardScope, pinned: 
     val common = pinned.filter { it in rangeChoices }
     val extra = (Range.entries.filter { it.rollingHours > 0 } + rangeChoices.filterNot { it in common })
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PageTitle("活动", Modifier.weight(1f))
-            val devices = snapshot?.collectors.orEmpty()
-            val options: List<String?> = listOf(null) + devices.map { it.key }
-            CompactChoice(devices.firstOrNull { it.key == scope.device }?.label ?: "所有设备", options,
-                { key -> devices.firstOrNull { it.key == key }?.label ?: "所有设备" }) { onScope(scope.copy(device = it)) }
-        }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 common.forEach { range -> FilterChip(scope.range == range, { onScope(scope.copy(range = range)) }, { Text(range.label) }) }

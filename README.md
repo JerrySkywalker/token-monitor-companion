@@ -46,7 +46,7 @@ The overview and Activity tab share calendar filters. Intraday charts use observ
 
 Both Release APKs share an application ID and release certificate. Use the same signing channel for in-place upgrades. Switching between Debug and Release requires uninstalling the differently signed build, which clears its local configuration.
 
-On the phone, open **Settings → Overview layout** (总览布局) to switch between **Standard** (普通) and **Compact** (紧凑). The app keeps your card selection and order.
+On the phone, open **Settings → Overview → Overview layout** (设置 → 总览 → 总览布局) to switch between **Standard** (普通) and **Compact** (紧凑). The app keeps your card selection and order. Open **Settings → About** (关于) to view the project links and check for a new stable release on GitHub.
 
 ## Wear OS setup
 

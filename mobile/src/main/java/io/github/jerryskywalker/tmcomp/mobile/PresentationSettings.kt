@@ -147,7 +147,6 @@ internal fun <T> ChoiceSetting(title: String, selected: T, choices: List<T>, lab
 
 @Composable
 internal fun DevicesTab(snapshot: Snapshot?, display: CollectorDisplay, onDevice: (String) -> Unit, onWear: () -> Unit) {
-    PageTitle("设备")
     SettingsGroup { SettingRow("管理 Wear OS 手表", icon = R.drawable.settings_watch, onClick = onWear) }
     SettingsHeading("Hub 采集设备")
     if (snapshot?.collectors.isNullOrEmpty()) Text("Hub 暂未上报设备。")
