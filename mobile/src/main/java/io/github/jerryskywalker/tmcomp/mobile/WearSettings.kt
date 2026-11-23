@@ -38,18 +38,19 @@ internal fun WearPairingEntry(busy: Boolean, dataLayerUnavailable: Boolean, onSc
 internal fun WearDevices(
     watches: List<WatchConfig>,
     available: List<DiscoveredWatch>,
+    connected: List<String>,
     busy: Boolean,
-    showBoundList: Boolean,
     onOpen: (WatchConfig) -> Unit,
     onDiscover: () -> Unit,
     onBind: (DiscoveredWatch) -> Unit,
 ) {
-    if (showBoundList && watches.isNotEmpty()) {
+    if (watches.isNotEmpty()) {
         SettingsHeading("已绑定手表")
         SettingsGroup {
             watches.forEachIndexed { index, watch ->
                 if (index > 0) SettingsDivider()
-                SettingRow(watch.label, icon = R.drawable.settings_watch, onClick = { onOpen(watch) })
+                SettingRow(watch.label, icon = R.drawable.settings_watch,
+                    value = if (watch.id in connected) "已连接" else "未连接", onClick = { onOpen(watch) })
             }
         }
     }
@@ -87,7 +88,7 @@ internal fun WatchSettings(
     var rateOpen by remember(watch.id) { mutableStateOf(false) }
     var ringOpen by remember(watch.id) { mutableStateOf(false) }
     val report = watch.report?.takeIf { it.appliedVersion == watch.version && it.mode == watch.mode }
-    val status = when (report?.state) {
+    val status = if (!connected) "手表未连接" else when (report?.state) {
         WatchStatus.READY -> "已同步"
         WatchStatus.PAUSED -> "已暂停"
         WatchStatus.NEEDS_PAIRING -> "等待 Hub 设置"
@@ -114,7 +115,7 @@ internal fun WatchSettings(
                 Text("配置 v" + watch.version + " · " + phoneLink,
                     style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
             }
-            SettingsStatus(status, report?.state == WatchStatus.READY)
+            SettingsStatus(status, connected && report?.state == WatchStatus.READY)
         }
     }
 

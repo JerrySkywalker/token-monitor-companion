@@ -16,10 +16,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.github.jerryskywalker.tmcomp.core.Snapshot
 import io.github.jerryskywalker.tmcomp.core.CandleColors
 import io.github.jerryskywalker.tmcomp.core.displayClock
@@ -29,6 +34,8 @@ internal fun SettingsHome(
     origin: String,
     reachable: Boolean?,
     quotaLayout: QuotaLayout,
+    overviewLayout: OverviewLayout,
+    onOverviewLayout: (OverviewLayout) -> Unit,
     watchCount: Int,
     onServer: () -> Unit,
     onOverview: () -> Unit,
@@ -45,12 +52,14 @@ internal fun SettingsHome(
     onWear: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Text("设置", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        PageTitle("设置")
         ServerConnectionCard(origin.substringAfter("://"), reachable, onServer)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SettingsHeading("显示与桌面")
             SettingsGroup {
                 ChoiceSetting("外观", theme, AppTheme.entries, { it.label }, onTheme)
+                SettingsDivider()
+                ChoiceSetting("总览布局", overviewLayout, OverviewLayout.entries, { it.label }, onOverviewLayout)
                 SettingsDivider()
                 SettingRow("编辑总览", "展示队列和卡片顺序", R.drawable.settings_grid, onClick = onOverview)
                 SettingsDivider()
@@ -77,11 +86,23 @@ internal fun SettingsHome(
     }
 }
 
+@Composable
+internal fun PageTitle(title: String, modifier: Modifier = Modifier) {
+    Text(title, modifier.semantics { heading() },
+        style = MaterialTheme.typography.titleLarge.copy(
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 30.sp,
+            lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
+        ),
+        maxLines = 1, overflow = TextOverflow.Ellipsis)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsTopBar(title: String, onBack: () -> Unit) {
     TopAppBar(
-        title = { Text(title, fontWeight = FontWeight.SemiBold) },
+        title = { PageTitle(title) },
         navigationIcon = {
             IconButton(onBack) { SettingsIcon(R.drawable.settings_back, "返回") }
         },

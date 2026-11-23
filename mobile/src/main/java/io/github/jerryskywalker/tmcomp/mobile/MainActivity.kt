@@ -25,6 +25,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.glance.appwidget.updateAll
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import io.github.jerryskywalker.tmcomp.core.*
@@ -81,6 +84,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     val context = LocalContext.current
     val sync = remember { PhoneSync(context) }
     val scope = rememberCoroutineScope()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     var state by remember { mutableStateOf(sync.state()) }
     var credentials by remember { mutableStateOf(sync.storage.credentials()) }
     var busy by remember { mutableStateOf(false) }
@@ -94,6 +98,9 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     var watchHubParent by rememberSaveable { mutableStateOf("wear") }
     var watchDisplayParent by rememberSaveable { mutableStateOf("wear") }
     var limitKind by rememberSaveable { mutableStateOf("quota") }
+    var overviewLayout by remember {
+        mutableStateOf(sync.storage.read<OverviewLayout>(OVERVIEW_LAYOUT_KEY) ?: OverviewLayout.STANDARD)
+    }
     var quotaLayout by remember {
         mutableStateOf(sync.storage.read<QuotaLayout>(QUOTA_LAYOUT_KEY) ?: QuotaLayout.STANDARD)
     }
@@ -183,7 +190,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     fun scanWatch(display: Boolean = false) {
         error = null
         scanDisplay = display
-        val options = ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+        val options = ScanOptions().setCaptureActivity(WatchQrActivity::class.java).setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             .setOrientationLocked(false).setBeepEnabled(false).setBarcodeImageEnabled(false)
             .setPrompt(if (display) "扫描手表「从手机导入显示设置」中的配对码" else "扫描手表「从手机导入 Hub」中的配对码")
         try {
@@ -223,21 +230,39 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
         }
     }
 
-    LaunchedEffect(credentials?.origin) {
-        if (credentials == null) {
+    LaunchedEffect(sync) {
+        sync.changes().collect { next ->
+            state = next
+            if (next.snapshot != null || next.usageError != null) hubReachable = next.usageError == null
+        }
+    }
+    LaunchedEffect(lifecycle, credentials?.origin, credentials?.secret) {
+        val connection = credentials
+        if (connection == null) {
             hubReachable = null
             return@LaunchedEffect
         }
         PhoneSync.schedule(context)
-        checkConnection()
-        var previous = 0
-        while (true) {
-            delay(1_000)
-            if (!busy) state = sync.state()
-            previous++
-            if (previous >= 60) {
-                previous = 0
-                checkConnection()
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            launch { sync.watchUpdates().collect { sync.observeWatches() } }
+            Hub(connection).refreshWhileVisible(60_000) {
+                try {
+                    sync.refresh()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // The state stream exposes connection failures while retaining cached usage.
+                }
+            }
+        }
+    }
+    val showingWear = screen in setOf("wear", "watch", "watchDisplay", "watchHub")
+    LaunchedEffect(lifecycle, showingWear) {
+        if (!showingWear) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                sync.observeWatches()
+                delay(4_000)
             }
         }
     }
@@ -246,7 +271,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     val icons = listOf(R.drawable.nav_home, R.drawable.nav_quota, R.drawable.nav_activity, R.drawable.settings_watch, R.drawable.nav_settings)
     val scroll = rememberScrollState()
     val inSettings = credentials != null && tab == 4
-    val settingsTitle = if (inSettings) when (screen) {
+    val settingsTitle = when (screen) {
         "editor" -> "编辑总览"
         "overviewRanges" -> "总览时间筛选"
         "quotaLayout" -> "额度页布局"
@@ -257,10 +282,17 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
         "server" -> "Hub 详情"
         "hubEdit" -> "编辑手机 Hub"
         "watchHub" -> "手表 Hub 直连设置"
+        "quotaDetail" -> "账户额度明细"
+        "quotaOrder" -> "调整账户顺序"
+        "activityTool", "tool" -> "工具明细"
+        "tools" -> "我的工具"
+        "composition" -> "用量明细"
         else -> null
-    } else if (screen == "quotaDetail") "账户额度明细" else null
+    }
     val compactQuota = credentials != null && screen.isEmpty() && tab == 1 && quotaLayout == QuotaLayout.COMPACT
     val activityRoot = credentials != null && screen.isEmpty() && tab == 2
+    val overview = credentials != null && screen.isEmpty() && tab == 0
+    val compactOverview = overview && overviewLayout == OverviewLayout.COMPACT
     LaunchedEffect(tab, screen) { scroll.scrollTo(0) }
     Scaffold(topBar = { settingsTitle?.let { SettingsTopBar(it, ::back) } }, bottomBar = {
         if (credentials != null && screen.isEmpty()) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
@@ -271,28 +303,21 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
         }
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 15.dp).verticalScroll(scroll),
-            verticalArrangement = Arrangement.spacedBy(if (compactQuota) 5.dp else 10.dp)) {
-            if (settingsTitle != null || inSettings) {
-                if (screen.isEmpty()) Spacer(Modifier.height(8.dp))
-            } else if (compactQuota || activityRoot) {
-                Spacer(Modifier.height(2.dp))
-            } else {
-                Spacer(Modifier.height(8.dp))
+            verticalArrangement = Arrangement.spacedBy(if (compactQuota || compactOverview) 5.dp else 10.dp)) {
+            Spacer(Modifier.height(if (compactOverview || compactQuota || activityRoot) 2.dp else 6.dp))
+            if (overview) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    if (screen.isNotEmpty()) TextButton(::back) { Text("‹ 返回") }
                     Image(painterResource(io.github.jerryskywalker.tmcomp.core.R.drawable.tmcomp_logo), null,
-                        Modifier.padding(end = 7.dp).size(29.dp))
-                    Text("Token Monitor", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
-                    if (credentials != null && screen.isEmpty() && tab == 0) {
-                        TextButton(::checkConnection, enabled = !busy) { Text("刷新") }
-                        TextButton({ screen = "editor" }) { Text("编辑总览") }
-                    }
+                        Modifier.padding(end = 6.dp).size(24.dp))
+                    PageTitle("Token Monitor", Modifier.weight(1f))
+                    TextButton(::checkConnection, enabled = !busy, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("刷新") }
+                    TextButton({ screen = "editor" }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("编辑总览") }
                 }
             }
             if (busy && !inSettings && !activityRoot) LinearProgressIndicator(Modifier.fillMaxWidth())
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (credentials == null) {
-                Text("连接 Token Monitor Hub", style = MaterialTheme.typography.titleLarge)
+                PageTitle("连接 Token Monitor Hub")
                 HubForm(startAddress = "", busy = busy, submit = "连接 Hub") { address, secret ->
                     act {
                         sync.connect(hubConnection(address, secret, BuildConfig.DEBUG))
@@ -305,7 +330,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                         sync.storage.write(OVERVIEW_QUEUE_KEY, next)
                         layout = next
                         screen = ""
-                    }, { screen = "" }, showTitle = settingsTitle == null)
+                    }, { screen = "" })
                     "overviewRanges" -> EditOverviewRanges(pinnedRanges, { next ->
                         sync.storage.write(OVERVIEW_RANGES_KEY, next)
                         if (dashboardScope.range !in next) range = next.first().name
@@ -336,7 +361,6 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                         }
                     }
                     "quotaOrder" -> {
-                        Text("调整账户顺序", style = MaterialTheme.typography.headlineSmall)
                         EditQuotaOrder(snapshot.quotaOrder(limitKind, quotaOrders[limitKind].orEmpty()),
                             onSave = { ids ->
                                 val prior = quotaOrders[limitKind].orEmpty()
@@ -346,7 +370,6 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                             }, onCancel = ::back)
                     }
                     "tools" -> {
-                        Text("我的工具", style = MaterialTheme.typography.headlineSmall)
                         ScopePicker(snapshot, dashboardScope, ::setScope, pinnedRanges)
                         snapshot?.let { data ->
                             tools(data, period).forEach { tool ->
@@ -433,8 +456,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                                     onClick = { screen = "watchPreset" })
                             }
                         }
-                        val watch = if (screen == "wear") state.watches.singleOrNull()
-                            else state.watches.firstOrNull { it.id == watchId }
+                        val watch = state.watches.firstOrNull { screen == "watch" && it.id == watchId }
                         watch?.let {
                             val readings = if (it.mode == Mode.DIRECT) it.report?.readings.orEmpty() else snapshot?.readings.orEmpty()
                             WatchSettings(it, it.id in state.connected, readings, busy,
@@ -447,7 +469,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                             val available = state.available.filter { device ->
                                 state.watches.none { it.id == device.id } || device.id !in state.connected
                             }
-                            WearDevices(state.watches, available, busy, showBoundList = watch == null,
+                            WearDevices(state.watches, available, state.connected, busy,
                                 onOpen = { watchId = it.id; screen = "watch" },
                                 onDiscover = { act { sync.discover() } },
                                 onBind = { device ->
@@ -466,13 +488,12 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                         0 -> {
                             ScopePicker(snapshot, dashboardScope, ::setScope, pinnedRanges, header = {
                                 Column(Modifier.weight(1f)) {
-                                    Text("总览", style = MaterialTheme.typography.headlineMedium)
                                     OverviewFreshness(snapshot, stale, state.usageError != null, busy)
                                 }
                             })
                             if (snapshot != null) {
                                 if (layout.isEmpty()) Text("总览没有可见卡片。可从编辑总览添加。")
-                                layout.forEach { LedgerCard(it, snapshot, dashboardScope, trendStyle, interval, favorites, favoriteDisplay, candleColors,
+                                layout.forEach { LedgerCard(it, snapshot, dashboardScope, trendStyle, interval, favorites, favoriteDisplay, candleColors, overviewLayout,
                                     { screen = "favorites" }, ::showCard) }
                             }
                         }
@@ -500,7 +521,11 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                             tab = 4
                             screen = "wear"
                         })
-                        else -> SettingsHome(credentials?.origin.orEmpty(), hubReachable, quotaLayout, state.watches.size,
+                        else -> SettingsHome(credentials?.origin.orEmpty(), hubReachable, quotaLayout,
+                            overviewLayout = overviewLayout, onOverviewLayout = { next ->
+                                sync.storage.write(OVERVIEW_LAYOUT_KEY, next)
+                                overviewLayout = next
+                            }, watchCount = state.watches.size,
                             onServer = { screen = "server" },
                             onOverview = { screen = "editor" },
                             onRanges = { screen = "overviewRanges" },

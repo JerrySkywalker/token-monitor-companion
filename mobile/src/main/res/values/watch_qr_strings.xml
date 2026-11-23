@@ -1,0 +1,4 @@
+<resources>
+    <string name="watch_qr_title">扫描手表二维码</string>
+    <string name="watch_qr_hint">将手表二维码放入方框内</string>
+</resources>

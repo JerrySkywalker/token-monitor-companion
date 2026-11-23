@@ -266,7 +266,7 @@ class WidgetConfigurationActivity : ComponentActivity() {
                 var error by remember { mutableStateOf(false) }
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("选择桌面卡片", style = MaterialTheme.typography.headlineSmall)
+                    PageTitle("选择桌面卡片")
                     OverviewCard.entries.forEach { card ->
                         FilterChip(selection.card == card, { selection = selection.copy(card = card) },
                             { Text(card.title) }, enabled = !busy)

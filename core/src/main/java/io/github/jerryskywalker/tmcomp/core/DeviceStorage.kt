@@ -1,6 +1,7 @@
 package io.github.jerryskywalker.tmcomp.core
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -10,6 +11,12 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
@@ -31,6 +38,17 @@ class DeviceStorage(context: Context) {
         if (value == null) editor.remove(key) else editor.putString(key, wireJson.encodeToString(value))
         editor.apply()
     }
+
+    fun changes(key: String) = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, changed ->
+            if (changed == key || changed == null) trySend(Unit)
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        trySend(Unit)
+        awaitClose { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }.conflate()
+
+    fun hubChanges() = changes(HUB_CREDENTIAL).map { credentials() }.flowOn(Dispatchers.IO)
 
     fun credentials(): HubConnection? = synchronized(lock) {
         val blob = preferences.getString(HUB_CREDENTIAL, null) ?: return null

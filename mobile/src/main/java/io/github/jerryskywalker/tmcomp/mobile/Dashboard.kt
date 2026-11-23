@@ -30,6 +30,13 @@ data class CardOption(val id: String, val visible: Boolean = true)
 @Serializable
 data class DashboardScope(val range: Range = Range.TODAY, val device: String? = null)
 
+internal const val OVERVIEW_LAYOUT_KEY = "overview_layout_v1"
+
+internal enum class OverviewLayout(val label: String) {
+    STANDARD("普通"),
+    COMPACT("紧凑"),
+}
+
 internal const val OVERVIEW_QUEUE_KEY = "overview_queue_v2"
 internal fun cards(context: Context): List<OverviewCard> {
     val storage = DeviceStorage(context)
@@ -157,6 +164,7 @@ internal fun ScopePicker(snapshot: Snapshot?, value: DashboardScope, change: (Da
                         SegmentedButtonDefaults.itemShape(index, choices.size),
                         colors = SegmentedButtonDefaults.colors(activeContainerColor = MaterialTheme.colorScheme.primary,
                             activeContentColor = MaterialTheme.colorScheme.onPrimary), icon = {},
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                     ) { Text(range.label, maxLines = 1) }
                 }
             }
@@ -179,22 +187,27 @@ internal fun ScopePicker(snapshot: Snapshot?, value: DashboardScope, change: (Da
 @Composable
 internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: DashboardScope,
     trendStyle: TrendStyle, interval: TrendInterval, favorites: List<FavoriteQuota>?,
-    favoriteDisplay: FavoriteQuotaDisplay, candleColors: CandleColors,
+    favoriteDisplay: FavoriteQuotaDisplay, candleColors: CandleColors, layout: OverviewLayout,
     editFavorites: () -> Unit, detail: (OverviewCard, String?) -> Unit) {
     val period = snapshot.period(scope)
     val lines = cardLines(card, snapshot, scope, favorites, interval, favoriteDisplay)
+    val compact = layout == OverviewLayout.COMPACT
+    val typography = MaterialTheme.typography
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(if (compact) 14.dp else 18.dp),
         colors = CardDefaults.cardColors(containerColor = if (card == OverviewCard.SUMMARY)
             MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(
+            Modifier.padding(horizontal = if (compact) 10.dp else 12.dp, vertical = if (compact) 6.dp else 12.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
+        ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text(card.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                if (card == OverviewCard.QUOTAS) TextButton(editFavorites) { Text("选择条目") }
-                TextButton({ detail(card, null) }) {
-                    Text(if (card == OverviewCard.TOOLS) "全部工具 ›" else "明细 ›")
+                Text(card.title, Modifier.weight(1f), style = if (compact) typography.titleSmall else typography.titleMedium)
+                if (card == OverviewCard.QUOTAS) OverviewCardAction("选择条目", compact, editFavorites)
+                OverviewCardAction(if (card == OverviewCard.TOOLS) "全部工具 ›" else "明细 ›", compact) {
+                    detail(card, null)
                 }
             }
             when (card) {
@@ -203,8 +216,8 @@ internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: Dashboard
                         for ((label, value) in lines) Column(Modifier.weight(1f)) {
                             val main = if (label == "Tokens") displayCompactTokens(period?.tokens) else value
                             Text(main, Modifier.semantics { contentDescription = value }, fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.headlineSmall)
-                            Text(label, style = MaterialTheme.typography.labelMedium)
+                                style = if (compact) typography.titleLarge else typography.headlineSmall)
+                            Text(label, style = if (compact) typography.labelSmall else typography.labelMedium)
                         }
                     }
                     if (scope.device == null && scope.range in listOf(Range.LAST_7, Range.LAST_30, Range.LAST_365, Range.YEAR)) {
@@ -219,11 +232,11 @@ internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: Dashboard
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
-                            CompositionPlot(parts.map { it.second })
+                            CompositionPlot(parts.map { it.second }, compact)
                             Text(displayCompactTokens(period?.tokens), style = MaterialTheme.typography.labelSmall)
                         }
                         Column(Modifier.weight(1f)) {
-                            parts.filter { it.second != 0L }.forEach { (name, value) -> LedgerLine(name, displayNumber(value)) }
+                            parts.filter { it.second != 0L }.forEach { (name, value) -> LedgerLine(name, displayNumber(value), compact = compact) }
                         }
                     }
                 }
@@ -235,34 +248,46 @@ internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: Dashboard
                         val value = displayNumber(tool.usage?.tokens) + (quota?.remainingPercent?.let {
                             " · " + displayNumber(it) + "%"
                         } ?: "")
-                        LedgerLine(tool.label, value, Modifier.clickable { detail(card, tool.id) })
+                        LedgerLine(tool.label, value, Modifier.clickable { detail(card, tool.id) }, compact = compact)
                     }
                 }
                 OverviewCard.QUOTAS -> {
                     val rows = snapshot.favoriteLines(favorites, favoriteDisplay)
-                    if (rows.isEmpty()) Text("暂无读数") else rows.forEach { FavoriteQuotaRow(it) }
+                    if (rows.isEmpty()) Text("暂无读数") else rows.forEach { FavoriteQuotaRow(it, compact = compact) }
                 }
-                OverviewCard.WALLETS -> if (lines.isEmpty()) Text("暂无读数") else lines.forEach { (name, value) -> LedgerLine(name, value) }
+                OverviewCard.WALLETS -> if (lines.isEmpty()) Text("暂无读数") else lines.forEach { (name, value) -> LedgerLine(name, value, compact = compact) }
             }
         }
     }
 }
 
 @Composable
-internal fun LedgerLine(label: String, value: String, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Text(value, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+private fun OverviewCardAction(label: String, compact: Boolean, onClick: () -> Unit) {
+    if (compact) {
+        TextButton(onClick, Modifier.height(36.dp), contentPadding = PaddingValues(horizontal = 6.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium)
+        }
+    } else {
+        TextButton(onClick) { Text(label) }
     }
 }
 
 @Composable
-private fun CompositionPlot(parts: List<Long?>) {
+internal fun LedgerLine(label: String, value: String, modifier: Modifier = Modifier, compact: Boolean = false) {
+    val style = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
+    Row(modifier.fillMaxWidth().padding(vertical = if (compact) 2.dp else 5.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, Modifier.weight(1f), style = style)
+        Text(value, fontWeight = FontWeight.SemiBold, style = style)
+    }
+}
+
+@Composable
+private fun CompositionPlot(parts: List<Long?>, compact: Boolean) {
     val sum = parts.filterNotNull().sum().toFloat()
     val chartColors = listOf(Color(0xff087451), Color(0xff888cdb), Color(0xff519bb0), Color(0xff97c889), Color(0xff8d9897))
     val base = MaterialTheme.colorScheme.outlineVariant
-    Canvas(Modifier.size(83.dp)) {
-        val stroke = 11.dp.toPx()
+    Canvas(Modifier.size(if (compact) 66.dp else 83.dp)) {
+        val stroke = (if (compact) 8.dp else 11.dp).toPx()
         val offset = Offset(stroke / 2, stroke / 2)
         val inner = Size(size.width - stroke, size.height - stroke)
         drawArc(base, 0f, 360f, false, offset, inner, style = Stroke(stroke))

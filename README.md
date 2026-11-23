@@ -46,6 +46,8 @@ The overview and Activity tab share calendar filters. Intraday charts use observ
 
 Both Release APKs share an application ID and release certificate. Use the same signing channel for in-place upgrades. Switching between Debug and Release requires uninstalling the differently signed build, which clears its local configuration.
 
+On the phone, open **Settings → Overview layout** (总览布局) to switch between **Standard** (普通) and **Compact** (紧凑). The app keeps your card selection and order.
+
 ## Wear OS setup
 
 | Mode | How the watch gets data |
@@ -56,7 +58,7 @@ Both Release APKs share an application ID and release certificate. Use the same 
 ### Scan the QR code for direct mode
 
 1. Connect the phone and watch to the same Wi-Fi network and make sure they can reach each other.
-2. In the watch app, choose **Import Hub from phone** (从手机导入 Hub). If the dashboard is open, use its gear button to reach connection settings.
+2. On the watch, open **Settings → Connection and sync → Import Hub from phone** (设置 → 连接与同步 → 从手机导入 Hub). Use the dashboard gear to open Settings.
 3. On the phone, open **Settings → Wear OS → Scan watch pairing code** (扫描手表配对码). Scan the watch QR code and tap **Send Hub configuration** (发送 Hub 配置).
 4. Wait for **Watch verified the Hub** (手表已验证 Hub). The watch saves the connection and enters direct mode. It can then fetch over its own network. Tap the dashboard timestamp to refresh and check **Local fetch** (本机取数) in connection settings.
 
@@ -66,7 +68,9 @@ The scan uses a two-minute, single-use code and an encrypted local Wi-Fi transfe
 
 1. Pair the devices in Wear OS system settings and open Token Monitor on both. On the phone, open **Settings → Wear OS** and bind the watch. If the watch is already in direct mode after scanning, enable **Allow phone discovery** (允许手机发现) in its connection settings first.
 2. Choose **Phone push** and check the watch's sync acknowledgement (已同步). For later switching to direct mode, send the Hub configuration from the bound watch's settings and select **Direct** after it is verified. Phone push requires the Wear OS Data Layer. [Data Layer overview](https://developer.android.com/training/wearables/data/overview)
-3. For a bound watch, use **Display and live preview** (显示与实时预览). To send a display preset to an independent watch, open **Import display settings from phone** (从手机导入显示设置) on the watch and scan from **Standalone watch display preset** (独立手表显示预设) on the phone.
+3. For a bound watch, use **Display and live preview** (显示与实时预览). On a standalone watch, open **Display settings → Import display settings from phone** (显示设置 → 从手机导入显示设置). Scan from **Standalone watch display preset** (独立手表显示预设) on the phone.
+
+While visible, the phone and a watch in direct mode listen for Hub events and refresh when new data arrives. In phone push mode, data item events update the watch. Periodic fetches cover Hubs without an event stream and refreshes scheduled in the background.
 
 ## Build and verify locally
 

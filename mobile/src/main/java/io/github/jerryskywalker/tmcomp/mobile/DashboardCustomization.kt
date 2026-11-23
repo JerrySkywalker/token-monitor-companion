@@ -85,11 +85,8 @@ internal fun ReorderRows(entries: List<ReorderEntry>, move: (Int, Int) -> Unit, 
 }
 
 @Composable
-internal fun EditOverview(current: List<OverviewCard>, onSave: (List<OverviewCard>) -> Unit, onCancel: () -> Unit,
-    showTitle: Boolean = true,
-) {
+internal fun EditOverview(current: List<OverviewCard>, onSave: (List<OverviewCard>) -> Unit, onCancel: () -> Unit) {
     var draft by rememberSaveable { mutableStateOf(ArrayList(current)) }
-    if (showTitle) Text("编辑总览", style = MaterialTheme.typography.headlineSmall)
     SettingsHeading("展示队列")
     if (draft.isEmpty()) Text("从下方添加卡片。")
     ReorderRows(draft.map { ReorderEntry(it.name, it.title) },

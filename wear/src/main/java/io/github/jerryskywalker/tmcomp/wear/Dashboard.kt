@@ -64,15 +64,16 @@ internal fun StopWatchDashboard(
     var cycle by rememberSaveable { mutableStateOf(false) }
     val display = config?.display ?: WatchDisplay()
     val now = Instant.now()
+    val waitingForPhone = status == "等待手机连接"
     val cached = data.stale || locallyStale(data.upstreamAt, data.freshnessMs) ||
-        config?.paused == true || status.contains("失败") || status.contains("不可达")
+        config?.paused == true || waitingForPhone || status.contains("失败") || status.contains("不可达")
     val ringKey = ringChoice ?: data.readings.firstOrNull { it.id == config?.pinnedId }?.toolKey
     val provider = data.readings.firstOrNull { it.toolKey == ringKey }?.provider ?: ringKey
     val ringCategory = if (cycle) WatchQuotaCategory.CYCLE else WatchQuotaCategory.SHORT
     val ring = data.readings.filter { it.toolKey == ringKey && it.watchQuotaCategory == ringCategory &&
         !cached && fresh(it, data.freshnessMs, now) }.mapNotNull { it.remainingPercent }.minOrNull()
     val cap = if (!ringKey.isNullOrEmpty()) (if (cycle) "周期 " else "短时 ") + provider + " " +
-        (ring?.let { displayNumber(it) + "%" } ?: "—") else "Token Monitor"
+        (ring?.let { displayNumber(it) + "%" } ?: "—") else "Token Monitor".takeIf { pager.currentPage == 0 }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(if (display.oled) Color.Black else Color(0xff05070a))) {
         val w = maxWidth
@@ -85,8 +86,10 @@ internal fun StopWatchDashboard(
             if (ring != null) drawArc(hue(ringKey), 120f, (ring * 3).toFloat(), false, offset, area, style = Stroke(2.dp.toPx()))
         }
         TimeText(modifier = Modifier.align(Alignment.TopCenter))
-        Text(cap, Modifier.align(Alignment.TopCenter).offset(y = h * .11f).widthIn(max = w * .72f),
-            fontSize = 10.sp, color = if (ring == null) muted else hue(ringKey), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        cap?.let {
+            Text(it, Modifier.align(Alignment.TopCenter).offset(y = h * .11f).widthIn(max = w * .72f),
+                fontSize = 10.sp, color = if (ring == null) muted else hue(ringKey), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
         Row(Modifier.align(Alignment.TopCenter).offset(y = h * .16f).height(27.dp).width(w * .72f),
             horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Text(names[pager.currentPage], fontSize = 17.sp, fontWeight = FontWeight.Bold, color = bright)
@@ -135,7 +138,8 @@ internal fun StopWatchDashboard(
                 }.semantics { contentDescription = "手表$name" }, fontSize = 10.sp, color = muted)
             }
         }
-        Text((if (cached) "缓存 · " else "$status · ") + displayClock(data.upstreamAt),
+        val source = if (waitingForPhone) "等待手机 · 缓存" else if (cached) "缓存" else status
+        Text("$source · " + displayClock(data.upstreamAt),
             Modifier.align(Alignment.TopCenter).offset(y = h * .87f).clickable(onClick = refresh)
                 .semantics { contentDescription = "刷新手表快照" }, fontSize = 10.sp, color = if (cached) warning else muted,
             maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -41,6 +41,9 @@ fun hubConnection(address: String, secret: String, allowInsecure: Boolean): HubC
 }
 
 class Hub(private val connection: HubConnection) {
+    suspend fun refreshWhileVisible(fallbackMillis: Long, refresh: suspend () -> Unit) =
+        connection.refreshWhileVisible(fallbackMillis, refresh)
+
     suspend fun subscriptions(): HubSubscriptions = withContext(Dispatchers.IO) {
         request("/api/subscriptions", 4_000, 1024 * 1024).useJson<HubSubscriptions>().also {
             if (!it.ok) throw IOException("无法读取 Hub 订阅")

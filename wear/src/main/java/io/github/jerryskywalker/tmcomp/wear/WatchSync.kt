@@ -25,6 +25,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -52,8 +54,12 @@ class WatchSync(context: Context) {
     private val id get() = storage.installationId
 
     fun view() = storage.read<WatchView>(WATCH_VIEW) ?: WatchView()
+    fun changes() = storage.changes(WATCH_VIEW).map { view() }
+    fun hubChanges() = storage.hubChanges()
+    fun phoneUpdates() = transport.updates(FROM_PHONE).catch { }
     fun link() = storage.read<PhoneLink>(LINK)
     fun hubOrigin() = storage.credentials()?.origin.orEmpty()
+    suspend fun phoneConnected(): Boolean? = link()?.let { it.node in checked { transport.connectedNodes() }.orEmpty() }
     private fun save(view: WatchView) {
         val previous = view()
         if (view == previous) return
@@ -65,7 +71,10 @@ class WatchSync(context: Context) {
 
     suspend fun tick(force: Boolean = false) = mutex.withLock { tickLocked(force) }
 
-    private suspend fun tickLocked(force: Boolean) {
+    suspend fun receivePhoneUpdate() = mutex.withLock { tickLocked(force = false, fetchDirect = false) }
+
+    private suspend fun tickLocked(force: Boolean, fetchDirect: Boolean = true) {
+        val previous = view().config
         acceptPhoneData()
         val current = view()
         val config = current.config
@@ -89,6 +98,11 @@ class WatchSync(context: Context) {
             }
             else -> {
                 schedule(config.refreshMinutes)
+                val requested = previous?.mode != Mode.DIRECT || previous.paused || previous.refreshRequest != config.refreshRequest
+                if (!fetchDirect && !requested && current.snapshot != null) {
+                    publishStatus(if (current.error == null) WatchStatus.READY else WatchStatus.OFFLINE)
+                    return
+                }
                 try {
                     val snapshot = Hub(credentials).snapshot(current.snapshot, extendedTrends = true)
                         .forWatch(config.pinnedId, keepTrends = true)
@@ -293,7 +307,7 @@ class WatchSync(context: Context) {
 
         fun enqueue(context: Context) {
             WorkManager.getInstance(context).enqueueUniqueWork("wear-phone-data", ExistingWorkPolicy.APPEND_OR_REPLACE,
-                OneTimeWorkRequestBuilder<WatchWorker>().build())
+                OneTimeWorkRequestBuilder<WatchPhoneWorker>().build())
         }
     }
 }
@@ -309,6 +323,13 @@ private suspend inline fun <T> checked(block: () -> T): T? = try {
 class WatchWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
         WatchSync(applicationContext).tick()
+        return Result.success()
+    }
+}
+
+class WatchPhoneWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
+    override suspend fun doWork(): Result {
+        WatchSync(applicationContext).receivePhoneUpdate()
         return Result.success()
     }
 }

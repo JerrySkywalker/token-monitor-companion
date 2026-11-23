@@ -3,12 +3,16 @@ package io.github.jerryskywalker.tmcomp.core
 import android.content.Context
 import android.net.Uri
 import com.google.android.gms.wearable.DataItem
+import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import java.io.IOException
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
 
 const val FROM_PHONE = "/tmcomp/v2/phone/"
 const val PHONE_TRENDS = FROM_PHONE + "trend/"
@@ -63,4 +67,24 @@ class Transport(context: Context) {
     suspend fun connectedNodes(): Set<String> = withTimeoutOrNull(4_000) {
         Wearable.getNodeClient(context).connectedNodes.await().map { it.id }.toSet()
     }.orEmpty()
+
+    fun updates(prefix: String) = callbackFlow {
+        val listener = DataClient.OnDataChangedListener { events ->
+            if (events.any { it.dataItem.uri.path?.startsWith(prefix) == true }) trySend(Unit)
+        }
+        val uri = Uri.parse("wear://*$prefix")
+        val registration = data.addListener(listener, uri, DataClient.FILTER_PREFIX)
+        try {
+            val registered = withTimeoutOrNull(4_000) {
+                registration.await()
+                true
+            }
+            if (registered == true) {
+                trySend(Unit)
+                awaitClose { }
+            }
+        } finally {
+            registration.addOnSuccessListener { data.removeListener(listener) }
+        }
+    }.conflate()
 }

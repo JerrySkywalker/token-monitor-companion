@@ -32,7 +32,7 @@ internal fun ActivityScreen(snapshot: Snapshot?, scope: DashboardScope, pinned: 
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("活动", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+            PageTitle("活动", Modifier.weight(1f))
             val devices = snapshot?.collectors.orEmpty()
             val options: List<String?> = listOf(null) + devices.map { it.key }
             CompactChoice(devices.firstOrNull { it.key == scope.device }?.label ?: "所有设备", options,

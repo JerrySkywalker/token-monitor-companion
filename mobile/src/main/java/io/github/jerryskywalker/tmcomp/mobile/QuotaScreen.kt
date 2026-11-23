@@ -32,11 +32,9 @@ internal enum class QuotaLayout(val label: String) {
 @Composable
 internal fun QuotaScreen(snapshot: Snapshot?, stale: Boolean, kind: String, layout: QuotaLayout, order: List<String>,
     subscriptions: SubscriptionState?, onOrder: () -> Unit, onAccount: (String) -> Unit, onKind: (String) -> Unit) {
-    val typography = MaterialTheme.typography
     val accounts = snapshot.quotaOrder(kind, order)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text("额度与余额", Modifier.weight(1f),
-            style = if (layout == QuotaLayout.COMPACT) typography.headlineSmall else typography.headlineMedium)
+        PageTitle("额度与余额", Modifier.weight(1f))
         if (kind != "subscriptions") TextButton(onOrder, enabled = accounts.size > 1) { Text("调整顺序") }
     }
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {

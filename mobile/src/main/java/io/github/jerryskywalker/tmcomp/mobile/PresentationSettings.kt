@@ -118,9 +118,9 @@ internal fun EditFavoriteQuotas(snapshot: Snapshot?, favorites: List<FavoriteQuo
 }
 
 @Composable
-internal fun FavoriteQuotaRow(line: FavoriteQuotaLine) {
+internal fun FavoriteQuotaRow(line: FavoriteQuotaLine, compact: Boolean = false) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        LedgerLine(line.label, line.value)
+        LedgerLine(line.label, line.value, compact = compact)
         line.fill?.let { ShareBar(it) }
     }
 }
@@ -147,7 +147,7 @@ internal fun <T> ChoiceSetting(title: String, selected: T, choices: List<T>, lab
 
 @Composable
 internal fun DevicesTab(snapshot: Snapshot?, display: CollectorDisplay, onDevice: (String) -> Unit, onWear: () -> Unit) {
-    Text("设备", style = MaterialTheme.typography.headlineMedium)
+    PageTitle("设备")
     SettingsGroup { SettingRow("管理 Wear OS 手表", icon = R.drawable.settings_watch, onClick = onWear) }
     SettingsHeading("Hub 采集设备")
     if (snapshot?.collectors.isNullOrEmpty()) Text("Hub 暂未上报设备。")

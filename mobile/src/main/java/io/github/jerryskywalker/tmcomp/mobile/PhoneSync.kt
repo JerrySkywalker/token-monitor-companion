@@ -20,6 +20,8 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -67,6 +69,8 @@ class PhoneSync(context: Context) {
         lastView = encoded to state
         return state
     }
+    fun changes() = storage.changes(PHONE_VIEW_KEY).map { state() }
+    fun watchUpdates() = transport.updates(FROM_WATCH).catch { }
     private fun link(id: String) = storage.read<WatchLink>(LINK_PREFIX + id)
 
     private suspend fun save(value: PhoneState) {
@@ -135,7 +139,9 @@ class PhoneSync(context: Context) {
 
     suspend fun discover() = mutex.withLock { syncWatches() }
 
-    private suspend fun syncWatches() {
+    suspend fun observeWatches() = mutex.withLock { syncWatches(deliver = false) }
+
+    private suspend fun syncWatches(deliver: Boolean = true) {
         val previous = state()
         val peers = attempt { transport.connectedNodes() }
         val inbox = attempt { transport.items(FROM_WATCH) }
@@ -145,7 +151,7 @@ class PhoneSync(context: Context) {
             if (item.path != FROM_WATCH + message.id || !idPattern.matches(message.id)) return@mapNotNull null
             item.node to message
         }
-        if (BuildConfig.DEBUG) Log.d("TmCompDataLayer",
+        if (BuildConfig.DEBUG && deliver) Log.d("TmCompDataLayer",
             "Connected nodes=${nodes.size}, watch items=${packets.size}, " +
                 "node error=${dataLayerError(peers.exceptionOrNull())}, inbox error=${dataLayerError(inbox.exceptionOrNull())}")
         val watches = previous.watches.map { watch ->
@@ -161,10 +167,11 @@ class PhoneSync(context: Context) {
         val available = packets.filter { (node, packet) -> node in nodes && packet.binding == null && link(packet.id) == null }
             .map { (node, packet) -> DiscoveredWatch(packet.id, packet.label.take(70), node, packet.initial) }.distinctBy { it.id }
         val delivered = previous.snapshot?.let { if (previous.usageError == null) it else it.copy(stale = true) }
+        val connected = watches.filter { link(it.id)?.node in nodes }.map { it.id }
         save(previous.copy(watches = watches, available = available,
-            connected = watches.filter { link(it.id)?.node in nodes }.map { it.id },
-            wearAvailable = peers.isSuccess && inbox.isSuccess))
+            connected = connected, wearAvailable = peers.isSuccess && inbox.isSuccess))
         for (watch in watches) {
+            if (!deliver && (watch.id !in connected || watch.id in previous.connected)) continue
             val connection = link(watch.id) ?: continue
             attempt { send(watch, connection, delivered) }
         }
@@ -282,7 +289,7 @@ class PhoneWorker(context: Context, parameters: WorkerParameters) : CoroutineWor
 
 class PhoneWearWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
-        PhoneSync(applicationContext).discover()
+        PhoneSync(applicationContext).observeWatches()
         return Result.success()
     }
 }
