@@ -89,6 +89,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var screen by rememberSaveable { mutableStateOf("") }
     var toolId by rememberSaveable { mutableStateOf<String?>(null) }
+    var quotaAccountId by rememberSaveable { mutableStateOf<String?>(null) }
     var watchId by rememberSaveable { mutableStateOf<String?>(null) }
     var watchHubParent by rememberSaveable { mutableStateOf("wear") }
     var watchDisplayParent by rememberSaveable { mutableStateOf("wear") }
@@ -101,14 +102,19 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
             ?.filter { it in rangeChoices }?.distinct()?.take(4).orEmpty().ifEmpty { defaultRanges })
     }
     var range by rememberSaveable { mutableStateOf(pinnedRanges.first().name) }
+    var activityRange by rememberSaveable { mutableStateOf<Range?>(null) }
     var collector by rememberSaveable { mutableStateOf<String?>(null) }
     var layout by remember { mutableStateOf(cards(context)) }
     var quotaOrders by remember { mutableStateOf(sync.storage.read<Map<String, List<String>>>(QUOTA_ORDER_KEY).orEmpty()) }
     var trendStyle by remember { mutableStateOf(sync.storage.read<TrendStyle>(TREND_STYLE_KEY) ?: TrendStyle.LINE) }
     var trendIntervals by remember { mutableStateOf(sync.storage.read<TrendIntervals>(TREND_INTERVAL_KEY) ?: TrendIntervals()) }
     var favorites by remember { mutableStateOf(sync.storage.read<List<FavoriteQuota>>(FAVORITE_QUOTAS_KEY)) }
+    var favoriteDisplay by remember { mutableStateOf(sync.storage.read<FavoriteQuotaDisplay>(FAVORITE_QUOTA_DISPLAY) ?: FavoriteQuotaDisplay()) }
+    var collectorDisplay by remember { mutableStateOf(sync.storage.read<CollectorDisplay>(COLLECTOR_DISPLAY) ?: CollectorDisplay()) }
+    var candleColors by remember { mutableStateOf(sync.storage.read<CandleColors>(CANDLE_COLORS) ?: CandleColors.GREEN_UP) }
     var watchPreset by remember { mutableStateOf(sync.storage.read<WatchDisplay>(WATCH_DISPLAY_PRESET_KEY) ?: WatchDisplay()) }
     val dashboardScope = DashboardScope(Range.valueOf(range), collector)
+    val activityScope = dashboardScope.copy(range = activityRange ?: dashboardScope.range)
     val interval = trendIntervals.forRange(dashboardScope.range)
     val snapshot = state.snapshot
     val period = snapshot?.period(dashboardScope)
@@ -134,7 +140,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
         toolId = id
         when (card) {
             OverviewCard.SUMMARY, OverviewCard.COMPOSITION -> { tab = 0; screen = "composition" }
-            OverviewCard.TREND -> { tab = 2; screen = "" }
+            OverviewCard.TREND -> { tab = 2; screen = ""; activityRange = null }
             OverviewCard.TOOLS -> { tab = 0; screen = if (id == null) "tools" else "tool" }
             OverviewCard.QUOTAS, OverviewCard.WALLETS -> {
                 tab = 1; screen = ""; limitKind = if (card == OverviewCard.WALLETS) "balance" else "quota"
@@ -245,14 +251,16 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
         "overviewRanges" -> "总览时间筛选"
         "quotaLayout" -> "额度页布局"
         "favorites" -> "关注额度"
+        "collectors" -> "Hub 采集设备"
         "wear", "watch" -> "Wear OS"
         "watchDisplay", "watchPreset" -> "手表显示设置"
         "server" -> "Hub 详情"
         "hubEdit" -> "编辑手机 Hub"
         "watchHub" -> "手表 Hub 直连设置"
         else -> null
-    } else null
+    } else if (screen == "quotaDetail") "账户额度明细" else null
     val compactQuota = credentials != null && screen.isEmpty() && tab == 1 && quotaLayout == QuotaLayout.COMPACT
+    val activityRoot = credentials != null && screen.isEmpty() && tab == 2
     LaunchedEffect(tab, screen) { scroll.scrollTo(0) }
     Scaffold(topBar = { settingsTitle?.let { SettingsTopBar(it, ::back) } }, bottomBar = {
         if (credentials != null && screen.isEmpty()) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
@@ -264,9 +272,9 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 15.dp).verticalScroll(scroll),
             verticalArrangement = Arrangement.spacedBy(if (compactQuota) 5.dp else 10.dp)) {
-            if (inSettings) {
+            if (settingsTitle != null || inSettings) {
                 if (screen.isEmpty()) Spacer(Modifier.height(8.dp))
-            } else if (compactQuota) {
+            } else if (compactQuota || activityRoot) {
                 Spacer(Modifier.height(2.dp))
             } else {
                 Spacer(Modifier.height(8.dp))
@@ -281,7 +289,7 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                     }
                 }
             }
-            if (busy && !inSettings) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (busy && !inSettings && !activityRoot) LinearProgressIndicator(Modifier.fillMaxWidth())
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (credentials == null) {
                 Text("连接 Token Monitor Hub", style = MaterialTheme.typography.titleLarge)
@@ -304,11 +312,28 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                         pinnedRanges = next
                         screen = ""
                     }, ::back)
-                    "favorites" -> EditFavoriteQuotas(snapshot, favorites) { next ->
+                    "favorites" -> EditFavoriteQuotas(snapshot, favorites, favoriteDisplay) { next, display ->
                         sync.storage.write(FAVORITE_QUOTAS_KEY, next)
+                        sync.storage.write(FAVORITE_QUOTA_DISPLAY, display)
                         favorites = next
+                        favoriteDisplay = display
                         refreshWidgets()
                         screen = ""
+                    }
+                    "collectors" -> CollectorSettings(snapshot, collectorDisplay) { next ->
+                        sync.storage.write(COLLECTOR_DISPLAY, next)
+                        collectorDisplay = next
+                    }
+                    "quotaDetail" -> QuotaDetail(snapshot.quotaOrder(limitKind, emptyList()).firstOrNull { it.sortId == quotaAccountId },
+                        state.quotaScope, snapshot?.retrievedAt)
+                    "activityTool" -> {
+                        Text(activityScope.range.label, style = MaterialTheme.typography.titleMedium)
+                        snapshot?.let { data ->
+                            val usage = data.period(activityScope)
+                            tools(data, usage).firstOrNull { it.id == toolId }?.let {
+                                ToolDetail(it, usage, data.freshnessMs, stale)
+                            }
+                        }
                     }
                     "quotaOrder" -> {
                         Text("调整账户顺序", style = MaterialTheme.typography.headlineSmall)
@@ -447,41 +472,28 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                             })
                             if (snapshot != null) {
                                 if (layout.isEmpty()) Text("总览没有可见卡片。可从编辑总览添加。")
-                                layout.forEach { LedgerCard(it, snapshot, dashboardScope, trendStyle, interval, favorites,
+                                layout.forEach { LedgerCard(it, snapshot, dashboardScope, trendStyle, interval, favorites, favoriteDisplay, candleColors,
                                     { screen = "favorites" }, ::showCard) }
                             }
                         }
                         1 -> QuotaScreen(snapshot, stale, limitKind, quotaLayout, quotaOrders[limitKind].orEmpty(),
-                            onOrder = { screen = "quotaOrder" }) { limitKind = it }
-                        2 -> {
-                            Text("活动", style = MaterialTheme.typography.headlineMedium)
-                            ScopePicker(snapshot, dashboardScope, ::setScope, pinnedRanges)
-                            var cost by rememberSaveable { mutableStateOf(false) }
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                TrendStyle.entries.forEach { style ->
-                                    FilterChip(trendStyle == style, {
-                                        trendStyle = style
-                                        sync.storage.write(TREND_STYLE_KEY, style)
-                                        refreshWidgets()
-                                    }, { Text(style.label) })
-                                }
-                                FilterChip(cost, { cost = !cost }, { Text("预估成本") })
-                            }
-                            SettingsGroup {
-                                ChoiceSetting("趋势显示间隔", interval, TrendInterval.forRange(dashboardScope.range), { it.label }) {
-                                    trendIntervals = trendIntervals.withRange(dashboardScope.range, it)
-                                    sync.storage.write(TREND_INTERVAL_KEY, trendIntervals)
-                                    refreshWidgets()
-                                }
-                            }
-                            snapshot?.let { TrendPlot(it.trend(dashboardScope, interval = interval), trendStyle, cost) }
-                            Text("工具分布", style = MaterialTheme.typography.titleMedium)
-                            snapshot?.let { tools(it, period) }.orEmpty().forEach { tool ->
-                                LedgerLine(tool.label, displayNumber(tool.usage?.tokens),
-                                    Modifier.clickable { showCard(OverviewCard.TOOLS, tool.id) })
-                            }
-                        }
-                        3 -> DevicesTab(snapshot, onDevice = { device ->
+                            state.subscriptions, onOrder = { screen = "quotaOrder" },
+                            onAccount = { id -> quotaAccountId = id; screen = "quotaDetail" }) { limitKind = it }
+                        2 -> ActivityScreen(snapshot, activityScope, pinnedRanges, trendStyle,
+                            trendIntervals.forRange(activityScope.range), candleColors,
+                            onScope = { next ->
+                                activityRange = next.range.takeIf { it.rollingHours > 0 }
+                                if (activityRange == null) setScope(next) else collector = next.device
+                            }, onStyle = { next ->
+                                trendStyle = next
+                                sync.storage.write(TREND_STYLE_KEY, next)
+                                refreshWidgets()
+                            }, onInterval = { next ->
+                                trendIntervals = trendIntervals.withRange(activityScope.range, next)
+                                sync.storage.write(TREND_INTERVAL_KEY, trendIntervals)
+                                refreshWidgets()
+                            }, onTool = { toolId = it; screen = "activityTool" })
+                        3 -> DevicesTab(snapshot, collectorDisplay, onDevice = { device ->
                             collector = device
                             tab = 0
                         }, onWear = {
@@ -498,6 +510,11 @@ private fun PhoneScreen(widget: WidgetSelection?, theme: AppTheme, setTheme: (Ap
                             },
                             onFavorites = { screen = "favorites" },
                             onQuotaLayout = { screen = "quotaLayout" },
+                            candleColors = candleColors, onCandleColors = { next ->
+                                sync.storage.write(CANDLE_COLORS, next)
+                                candleColors = next
+                                refreshWidgets()
+                            }, collectorLayout = collectorDisplay.layout, onCollectors = { screen = "collectors" },
                             onWidget = {
                                 if (!requestOverviewWidget(context)) {
                                     Toast.makeText(context, "请从主屏幕的小工具面板添加", Toast.LENGTH_SHORT).show()

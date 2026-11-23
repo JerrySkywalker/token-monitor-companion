@@ -51,7 +51,8 @@ internal fun Snapshot.period(scope: DashboardScope): Period? {
         Range.WEEK -> if (device == null) week ?: observedPeriod(scope.range) else null
         Range.MONTH -> device?.month ?: month
         Range.TOTAL -> if (device == null) allTime else device.allTime
-        else -> if (device == null) observedPeriod(scope.range) else null
+        else -> if (scope.range.rollingHours > 0) hourlyUsage(scope.range, scope.device)
+        else if (device == null) observedPeriod(scope.range) else null
     }
 }
 
@@ -60,6 +61,10 @@ private fun Snapshot.observedPeriod(range: Range): Period {
     return Period(
         tokens = days.mapNotNull { it.tokens }.takeIf { it.isNotEmpty() }?.sum(),
         costUsd = days.mapNotNull { it.costUsd }.takeIf { it.isNotEmpty() }?.sum(),
+        tools = days.flatMap { it.tools }.groupBy { it.key }.values.map { rows ->
+            rows.first().copy(tokens = rows.sumOf { it.tokens }, costUsd =
+                rows.mapNotNull { it.costUsd }.takeIf { it.size == rows.size }?.sum())
+        }.sortedByDescending { it.tokens },
     )
 }
 internal fun money(value: Double?) = value?.let { "USD " + displayNumber(it) } ?: "—"
@@ -107,7 +112,8 @@ internal fun components(period: Period?) = listOf(
 )
 
 internal fun cardLines(card: OverviewCard, snapshot: Snapshot, scope: DashboardScope,
-    favorites: List<FavoriteQuota>? = null, interval: TrendInterval = TrendInterval.NATIVE): List<Pair<String, String>> {
+    favorites: List<FavoriteQuota>? = null, interval: TrendInterval = TrendInterval.NATIVE,
+    favoriteDisplay: FavoriteQuotaDisplay = FavoriteQuotaDisplay()): List<Pair<String, String>> {
     val period = snapshot.period(scope)
     return when (card) {
         OverviewCard.SUMMARY -> listOf("Tokens" to displayNumber(period?.tokens), "预估成本" to money(period?.costUsd))
@@ -115,7 +121,7 @@ internal fun cardLines(card: OverviewCard, snapshot: Snapshot, scope: DashboardS
             .map { it.label.takeLast(5) to displayNumber(it.tokens) }
         OverviewCard.COMPOSITION -> components(period).map { (label, value) -> label to displayNumber(value) }
         OverviewCard.TOOLS -> tools(snapshot, period).take(5).map { it.label to displayNumber(it.usage?.tokens) }
-        OverviewCard.QUOTAS -> snapshot.favoriteLines(favorites)
+        OverviewCard.QUOTAS -> snapshot.favoriteLines(favorites, favoriteDisplay).map { it.label to it.value }
         OverviewCard.WALLETS -> snapshot.readings.filter { it.kind == "balance" }.take(4)
             .map { it.title() to if (it.stale) it.value() + " · 缓存" else it.value() }
     }
@@ -173,9 +179,10 @@ internal fun ScopePicker(snapshot: Snapshot?, value: DashboardScope, change: (Da
 @Composable
 internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: DashboardScope,
     trendStyle: TrendStyle, interval: TrendInterval, favorites: List<FavoriteQuota>?,
+    favoriteDisplay: FavoriteQuotaDisplay, candleColors: CandleColors,
     editFavorites: () -> Unit, detail: (OverviewCard, String?) -> Unit) {
     val period = snapshot.period(scope)
-    val lines = cardLines(card, snapshot, scope, favorites, interval)
+    val lines = cardLines(card, snapshot, scope, favorites, interval, favoriteDisplay)
     Card(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = if (card == OverviewCard.SUMMARY)
@@ -205,7 +212,8 @@ internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: Dashboard
                         Text("已记录 ${days.count { it.tokens != null }}/${days.size} 天", style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                OverviewCard.TREND -> TrendPlot(snapshot.trend(scope, interval = interval), trendStyle, compact = true)
+                OverviewCard.TREND -> TrendPlot(snapshot.trend(scope, interval = interval), trendStyle, compact = true,
+                    candleColors = candleColors)
                 OverviewCard.COMPOSITION -> {
                     val parts = components(period)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -230,7 +238,11 @@ internal fun LedgerCard(card: OverviewCard, snapshot: Snapshot, scope: Dashboard
                         LedgerLine(tool.label, value, Modifier.clickable { detail(card, tool.id) })
                     }
                 }
-                else -> if (lines.isEmpty()) Text("暂无读数") else lines.forEach { (name, value) -> LedgerLine(name, value) }
+                OverviewCard.QUOTAS -> {
+                    val rows = snapshot.favoriteLines(favorites, favoriteDisplay)
+                    if (rows.isEmpty()) Text("暂无读数") else rows.forEach { FavoriteQuotaRow(it) }
+                }
+                OverviewCard.WALLETS -> if (lines.isEmpty()) Text("暂无读数") else lines.forEach { (name, value) -> LedgerLine(name, value) }
             }
         }
     }

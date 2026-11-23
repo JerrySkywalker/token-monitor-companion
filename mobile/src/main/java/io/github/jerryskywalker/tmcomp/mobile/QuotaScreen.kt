@@ -1,6 +1,7 @@
 package io.github.jerryskywalker.tmcomp.mobile
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -30,16 +31,16 @@ internal enum class QuotaLayout(val label: String) {
 
 @Composable
 internal fun QuotaScreen(snapshot: Snapshot?, stale: Boolean, kind: String, layout: QuotaLayout, order: List<String>,
-    onOrder: () -> Unit, onKind: (String) -> Unit) {
+    subscriptions: SubscriptionState?, onOrder: () -> Unit, onAccount: (String) -> Unit, onKind: (String) -> Unit) {
     val typography = MaterialTheme.typography
     val accounts = snapshot.quotaOrder(kind, order)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text("额度与余额", Modifier.weight(1f),
             style = if (layout == QuotaLayout.COMPACT) typography.headlineSmall else typography.headlineMedium)
-        TextButton(onOrder, enabled = accounts.size > 1) { Text("调整顺序") }
+        if (kind != "subscriptions") TextButton(onOrder, enabled = accounts.size > 1) { Text("调整顺序") }
     }
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-        val tabs = listOf("quota" to "额度", "balance" to "余额", "spend" to "支出")
+        val tabs = listOf("quota" to "额度", "balance" to "余额", "spend" to "支出", "subscriptions" to "订阅")
         tabs.forEachIndexed { index, (key, label) ->
             SegmentedButton(kind == key, { onKind(key) }, SegmentedButtonDefaults.itemShape(index, tabs.size),
                 colors = SegmentedButtonDefaults.colors(activeContainerColor = MaterialTheme.colorScheme.primary,
@@ -47,6 +48,10 @@ internal fun QuotaScreen(snapshot: Snapshot?, stale: Boolean, kind: String, layo
                 icon = {},
             ) { Text(label) }
         }
+    }
+    if (kind == "subscriptions") {
+        SubscriptionsSection(subscriptions, layout == QuotaLayout.COMPACT)
+        return
     }
     if (snapshot == null) {
         Text("等待首份额度快照")
@@ -57,7 +62,7 @@ internal fun QuotaScreen(snapshot: Snapshot?, stale: Boolean, kind: String, layo
         "spend" -> "Hub 暂未上报按量支出"
         else -> "Hub 暂未上报额度"
     })
-    accounts.forEach { QuotaAccountCard(it, snapshot.freshnessMs, stale, layout) }
+    accounts.forEach { account -> QuotaAccountCard(account, snapshot.freshnessMs, stale, layout) { onAccount(account.sortId) } }
 }
 
 internal fun Snapshot?.quotaOrder(kind: String, order: List<String>): List<QuotaAccount> {
@@ -71,6 +76,7 @@ internal fun Snapshot?.quotaOrder(kind: String, order: List<String>): List<Quota
 @Composable
 internal fun QuotaAccountCard(account: QuotaAccount, freshnessMs: Long, stale: Boolean,
     layout: QuotaLayout = QuotaLayout.STANDARD,
+    onOpen: (() -> Unit)? = null,
 ) {
     val dense = layout == QuotaLayout.COMPACT
     val (mark, color) = when (account.providerId) {
@@ -96,7 +102,7 @@ internal fun QuotaAccountCard(account: QuotaAccount, freshnessMs: Long, stale: B
         }) },
     ).joinToString(" · ")
     OutlinedCard(
-        Modifier.fillMaxWidth(),
+        Modifier.fillMaxWidth().then(if (onOpen == null) Modifier else Modifier.clickable(onClickLabel = "查看账户额度明细", onClick = onOpen)),
         shape = RoundedCornerShape(if (dense) 14.dp else 20.dp),
         colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -125,6 +131,7 @@ internal fun QuotaAccountCard(account: QuotaAccount, freshnessMs: Long, stale: B
                         plan?.let { Text(it, style = typography.labelMedium, color = secondary) }
                     }
                 }
+                if (onOpen != null) Text("›", style = typography.titleMedium, color = secondary)
             }
 
             if (sections.isEmpty()) {

@@ -86,10 +86,15 @@ class DashboardTrendsTest {
             Reading("week", "Codex", "Personal", "Weekly", "quota", remainingPercent = 20.0),
         )
         val data = snapshot().copy(readings = readings)
-        val visible = data.favoriteLines(listOf(FavoriteQuota("five", "old label"), FavoriteQuota("missing", "temporarily missing")))
-        assertEquals(listOf(readings[0].title(), "temporarily missing"), visible.map { it.first })
-        assertEquals("暂未上报", visible.last().second)
-        assertTrue(data.favoriteLines(emptyList()).isEmpty())
+        val chosen = listOf(FavoriteQuota("five", "old label"), FavoriteQuota("missing", "temporarily missing"))
+        val visible = data.favoriteLines(chosen, FavoriteQuotaDisplay())
+        assertEquals(listOf(readings[0].title(), "temporarily missing"), visible.map { it.label })
+        assertEquals("暂未上报", visible.last().value)
+        assertEquals(0.6f, visible.first().fill!!, 0.001f)
+        val used = data.favoriteLines(chosen, FavoriteQuotaDisplay(QuotaDisplayStyle.TEXT, QuotaMetric.USED)).first()
+        assertEquals("已用 40%", used.value)
+        assertNull(used.fill)
+        assertTrue(data.favoriteLines(emptyList(), FavoriteQuotaDisplay()).isEmpty())
     }
 
     private fun sample(at: String, total: Long, device: Long?) =

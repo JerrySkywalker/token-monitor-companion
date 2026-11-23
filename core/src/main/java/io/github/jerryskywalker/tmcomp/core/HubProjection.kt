@@ -16,6 +16,7 @@ internal data class HubStats(
     val limits: HubLimits? = null,
     val historyPreview: HubHistory? = null,
     val devices: List<HubDevice> = emptyList(),
+    val subscriptionsUpdatedAt: String? = null,
 )
 
 @Serializable
@@ -122,7 +123,13 @@ private fun historyRows(history: List<JsonObject?>, previous: List<TrendDay>, to
         val date = latest.minusDays(offset.toLong())
         val row = observed[date]
         if (row != null) TrendDay(date.toString(), row["tokens"].orElse(row["totalTokens"]).count(),
-            row["cost"].orElse(row["costUsd"]).number())
+            row["cost"].orElse(row["costUsd"]).number(),
+            (row["perClient"] as? JsonObject)?.entries?.take(80)?.mapNotNull { (key, value) ->
+                val tool = value as? JsonObject
+                val count = tool?.get("tokens").orElse(tool?.get("totalTokens")).orElse(value).count()
+                count?.let { UsageEntry(key.take(100), (providerLabels[key] ?: key).take(100), it,
+                    tool?.get("cost").orElse(tool?.get("costUsd")).number()) }
+            } ?: old[date]?.tools.orEmpty())
         else old[date] ?: TrendDay(date.toString())
     }
     return rows to observed
@@ -220,7 +227,7 @@ internal fun projectHub(stats: HubStats, fallback: HubHistory?, now: Instant, pr
     }
     val inputs = fallback?.dailyTotals.orEmpty().takeLast(400) +
         fallback?.daily.orEmpty().takeLast(400) + stats.historyPreview?.daily.orEmpty().takeLast(400)
-    val (history, originals) = historyRows(inputs, previous, LocalDate.ofInstant(now, ZoneOffset.UTC), historyDays)
+    val (history, originals) = historyRows(inputs, previous, now.atZone(ZoneOffset.UTC).toLocalDate(), historyDays)
     val collectors = stats.devices.take(20).mapIndexedNotNull { index, device ->
         val id = device.deviceId.string()?.takeIf(String::isNotEmpty) ?: return@mapIndexedNotNull null
         val at = device.receivedAt.instant() ?: device.updatedAt.instant()
@@ -230,5 +237,6 @@ internal fun projectHub(stats: HubStats, fallback: HubHistory?, now: Instant, pr
     }
     return Snapshot(1, freshness, now.toString(), upstream?.toString(), isStale(upstream, now, freshness),
         stats.periods.today.toPeriod(), stats.periods.month.toPeriod(), readings, stats.periods.allTime?.toPeriod(),
-        stats.periods.week?.toPeriod() ?: calendarWeek(history, originals), history, collectors, sources)
+        stats.periods.week?.toPeriod() ?: calendarWeek(history, originals), history, collectors, sources,
+        subscriptionsUpdatedAt = stats.subscriptionsUpdatedAt)
 }

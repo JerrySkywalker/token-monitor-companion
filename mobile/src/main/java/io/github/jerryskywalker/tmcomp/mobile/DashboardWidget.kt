@@ -43,6 +43,7 @@ import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.LinearProgressIndicator as WidgetProgress
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
@@ -80,8 +81,11 @@ class DashboardWidget : GlanceAppWidget() {
         fun read() = WidgetView(storage.read<WidgetSelection>(key) ?: WidgetSelection(),
             storage.read<PhoneState>(PHONE_VIEW_KEY), storage.read<TrendStyle>(TREND_STYLE_KEY) ?: TrendStyle.LINE,
             storage.read<TrendIntervals>(TREND_INTERVAL_KEY) ?: TrendIntervals(),
-            storage.read<List<FavoriteQuota>>(FAVORITE_QUOTAS_KEY), storage.read<AppTheme>(THEME_KEY) ?: AppTheme.SYSTEM)
-        val prefsKeys = setOf<String?>(key, PHONE_VIEW_KEY, TREND_STYLE_KEY, TREND_INTERVAL_KEY, FAVORITE_QUOTAS_KEY, THEME_KEY)
+            storage.read<List<FavoriteQuota>>(FAVORITE_QUOTAS_KEY), storage.read<AppTheme>(THEME_KEY) ?: AppTheme.SYSTEM,
+            storage.read<FavoriteQuotaDisplay>(FAVORITE_QUOTA_DISPLAY) ?: FavoriteQuotaDisplay(),
+            storage.read<CandleColors>(CANDLE_COLORS) ?: CandleColors.GREEN_UP)
+        val prefsKeys = setOf<String?>(key, PHONE_VIEW_KEY, TREND_STYLE_KEY, TREND_INTERVAL_KEY, FAVORITE_QUOTAS_KEY,
+            THEME_KEY, FAVORITE_QUOTA_DISPLAY, CANDLE_COLORS)
         val systemDark = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         provideContent {
             val widget by produceState(read(), storage.preferences, key) {
@@ -100,8 +104,9 @@ class DashboardWidget : GlanceAppWidget() {
             val snapshot = widget.phone?.snapshot
             val stale = widget.phone?.usageError != null ||
                 snapshot?.let { it.stale || locallyStale(it.upstreamAt, it.freshnessMs) } == true
-            val chart = remember(snapshot, selection, widget.trendStyle, interval, palette) {
-                snapshot?.let { widgetChart(selection, it, widget.trendStyle, interval, palette.primary) }
+            val chart = remember(snapshot, selection, widget.trendStyle, interval, palette, widget.candleColors) {
+                snapshot?.let { widgetChart(selection, it, widget.trendStyle, interval, palette.primary, widget.candleColors,
+                    palette == nightColors || palette == oledColors) }
             }
             val open = Intent(context, MainActivity::class.java).setData(Uri.parse("tmcomp://widget/$appWidgetId"))
                 .putExtra(WIDGET_PAYLOAD, wireJson.encodeToString(selection))
@@ -112,13 +117,24 @@ class DashboardWidget : GlanceAppWidget() {
                 WidgetText(selection.card.title, style = heading, maxLines = 1)
                 if (snapshot == null) WidgetText("请在应用中连接 Hub", style = label)
                 else {
-                    val lines = cardLines(selection.card, snapshot, selection.scope, widget.favorites, interval)
+                    val lines = cardLines(selection.card, snapshot, selection.scope, widget.favorites, interval, widget.favoriteDisplay)
                     if (lines.isEmpty()) WidgetText("暂无读数", style = label)
                     if (selection.card == OverviewCard.SUMMARY) {
                         lines.forEach { (name, value) ->
                             val metric = if (name == "Tokens") displayCompactTokens(snapshot.period(selection.scope)?.tokens) else value
                             WidgetText("$name  $metric", style = heading, maxLines = 1)
                         }
+                    } else if (selection.card == OverviewCard.QUOTAS) {
+                        val bars = widget.favoriteDisplay.style == QuotaDisplayStyle.BAR
+                        snapshot.favoriteLines(widget.favorites, widget.favoriteDisplay).take(if (bars) (if (wide) 4 else 2) else (if (wide) 5 else 3))
+                            .forEach { row ->
+                                WidgetRow(GlanceModifier.widgetWidth()) {
+                                    WidgetText(row.label, GlanceModifier.defaultWeight(), style = label, maxLines = 1)
+                                    WidgetText(row.value, style = label, maxLines = 1)
+                                }
+                                row.fill?.let { fill -> WidgetProgress(fill, GlanceModifier.widgetWidth().widgetHeight(3.dp),
+                                    color = ColorProvider(palette.primary), backgroundColor = ColorProvider(palette.surfaceVariant)) }
+                            }
                     } else {
                         if (chart != null) Image(ImageProvider(chart), lines.joinToString("，") { it.first + " " + it.second },
                             GlanceModifier.widgetWidth().widgetHeight(if (wide) 52.dp else 37.dp))
@@ -149,10 +165,11 @@ class DashboardWidget : GlanceAppWidget() {
 }
 
 private data class WidgetView(val selection: WidgetSelection, val phone: PhoneState?, val trendStyle: TrendStyle,
-    val intervals: TrendIntervals, val favorites: List<FavoriteQuota>?, val theme: AppTheme)
+    val intervals: TrendIntervals, val favorites: List<FavoriteQuota>?, val theme: AppTheme,
+    val favoriteDisplay: FavoriteQuotaDisplay, val candleColors: CandleColors)
 
 private fun widgetChart(selection: WidgetSelection, data: Snapshot, trendStyle: TrendStyle, interval: TrendInterval,
-    accent: Color): Bitmap? {
+    accent: Color, candleColors: CandleColors, dark: Boolean): Bitmap? {
     val bitmap = when (selection.card) {
         OverviewCard.TREND -> {
             val series = data.trend(selection.scope, interval = interval)
@@ -167,7 +184,7 @@ private fun widgetChart(selection: WidgetSelection, data: Snapshot, trendStyle: 
                 if (trendStyle == TrendStyle.CANDLE) {
                     candles.forEach { candle ->
                         val x = 5f + candle.position * 240f
-                        paint.color = if (candle.close >= candle.open) accent.toArgb() else 0xffad5348.toInt()
+                        paint.color = candleColors.chartColor(candle.close >= candle.open, dark).toArgb()
                         canvas.drawLine(x, y(candle.high), x, y(candle.low), paint)
                         val top = y(maxOf(candle.open, candle.close))
                         canvas.drawRect(x - 3f, top, x + 3f, y(minOf(candle.open, candle.close)).coerceAtLeast(top + 1f), paint)

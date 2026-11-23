@@ -55,6 +55,10 @@ internal fun WatchDisplayEditor(initial: WatchDisplay, readings: List<Reading>, 
             display = display.copy(trend = trend.copy(style = it))
             previewTab = true
         }
+        ChoiceSetting("K 线涨跌颜色", trend.candleColors, CandleColors.entries, { it.label }) {
+            display = display.copy(trend = trend.copy(candleColors = it))
+            previewTab = true
+        }
         ChoiceSetting("趋势指标", trend.cost, listOf(false, true), { if (it) "预估成本" else "Tokens" }) {
             display = display.copy(trend = trend.copy(cost = it))
             previewTab = true
@@ -95,7 +99,8 @@ private fun WatchDisplayPreview(snapshot: Snapshot?, display: WatchDisplay, cate
                         val interval = trend.intervals.forRange(trend.range)
                         Text(trend.range.label + " · " + interval.label + " · " + trend.style.label,
                             style = MaterialTheme.typography.labelSmall)
-                        TrendPlot(snapshot.trend(trend.range, interval = interval), trend.style, trend.cost, compact = true)
+                        TrendPlot(snapshot.trend(trend.range, interval = interval), trend.style, trend.cost, compact = true,
+                            candleColors = trend.candleColors)
                     } else if (trendPage || groups.isEmpty()) {
                         Text("等待快照", style = MaterialTheme.typography.labelSmall)
                     } else {

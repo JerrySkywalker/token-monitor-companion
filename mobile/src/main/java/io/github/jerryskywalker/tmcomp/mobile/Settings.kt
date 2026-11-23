@@ -21,6 +21,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import io.github.jerryskywalker.tmcomp.core.Snapshot
+import io.github.jerryskywalker.tmcomp.core.CandleColors
 import io.github.jerryskywalker.tmcomp.core.displayClock
 
 @Composable
@@ -36,6 +37,10 @@ internal fun SettingsHome(
     onTheme: (AppTheme) -> Unit,
     onFavorites: () -> Unit,
     onQuotaLayout: () -> Unit,
+    candleColors: CandleColors,
+    onCandleColors: (CandleColors) -> Unit,
+    collectorLayout: CollectorLayout,
+    onCollectors: () -> Unit,
     onWidget: () -> Unit,
     onWear: () -> Unit,
 ) {
@@ -55,12 +60,16 @@ internal fun SettingsHome(
                 SettingsDivider()
                 SettingRow("额度页布局", icon = R.drawable.settings_layout, value = quotaLayout.label, onClick = onQuotaLayout)
                 SettingsDivider()
+                ChoiceSetting("K 线涨跌颜色", candleColors, CandleColors.entries, { it.label }, onCandleColors)
+                SettingsDivider()
                 SettingRow("桌面小工具", "添加到主屏幕", R.drawable.settings_widget, onClick = onWidget)
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SettingsHeading("设备")
             SettingsGroup {
+                SettingRow("Hub 采集设备", "布局和排序", R.drawable.settings_layout, value = collectorLayout.label, onClick = onCollectors)
+                SettingsDivider()
                 SettingRow("Wear OS", if (watchCount == 0) "暂无已绑定手表" else "$watchCount 台已绑定",
                     R.drawable.settings_watch, onClick = onWear)
             }

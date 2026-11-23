@@ -14,35 +14,44 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.jerryskywalker.tmcomp.core.*
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-internal val rangeChoices = Range.entries.filter { it != Range.TOTAL }
+internal val rangeChoices = Range.entries.filter { it != Range.TOTAL && it.rollingHours == 0L }
 internal val defaultRanges = listOf(Range.TODAY, Range.LAST_7, Range.LAST_30, Range.MONTH)
 internal const val OVERVIEW_RANGES_KEY = "overview_ranges_v1"
 internal const val TREND_STYLE_KEY = "trend_style_v1"
 
 internal const val TREND_INTERVAL_KEY = "trend_interval_v1"
+internal const val CANDLE_COLORS = "candle_colors_v1"
+
+internal fun CandleColors.chartColor(rising: Boolean, dark: Boolean): Color = if (usesGreen(rising)) {
+    if (dark) Color(0xff91d789) else Color(0xff087451)
+} else {
+    if (dark) Color(0xffffa097) else Color(0xffad5348)
+}
 
 internal fun Snapshot.trend(
     scope: DashboardScope, today: LocalDate = LocalDate.now(), zone: ZoneId = ZoneId.systemDefault(),
-    interval: TrendInterval = TrendInterval.NATIVE,
-) = trend(scope.range, scope.device, today, zone, interval = interval)
+    interval: TrendInterval = TrendInterval.NATIVE, now: Instant = Instant.now(),
+) = trend(scope.range, scope.device, today, zone, interval = interval, now = now)
 
 @Composable
-internal fun TrendPlot(series: TrendSeries, style: TrendStyle = TrendStyle.LINE, cost: Boolean = false, compact: Boolean = false) {
+internal fun TrendPlot(series: TrendSeries, style: TrendStyle = TrendStyle.LINE, cost: Boolean = false, compact: Boolean = false,
+    candleColors: CandleColors = CandleColors.GREEN_UP) {
     val values = series.points.map { it.value(cost) }
     val known = values.filterNotNull()
     val candles = if (style == TrendStyle.CANDLE) series.candles(cost) else emptyList()
     val maximum = if (style == TrendStyle.CANDLE) candles.maxOfOrNull { it.high } else known.maxOrNull()
     if (maximum == null) {
-        Text(if (series.intraday) "当日趋势等待连续采样" else "此范围暂无趋势数据",
+        Text(if (series.intraday) "此范围等待连续采样" else "此范围暂无趋势数据",
             style = MaterialTheme.typography.bodySmall)
         return
     }
     val peak = maximum.coerceAtLeast(1.0)
     val good = MaterialTheme.colorScheme.primary
-    val down = Color(0xffad5348)
+    val dark = MaterialTheme.colorScheme == nightColors || MaterialTheme.colorScheme == oledColors
     val grid = MaterialTheme.colorScheme.outlineVariant
     val unit = if (cost) "USD" else "Tokens"
     var selected by remember(series, style, cost) { mutableStateOf<Float?>(null) }
@@ -81,7 +90,7 @@ internal fun TrendPlot(series: TrendSeries, style: TrendStyle = TrendStyle.LINE,
         } else {
             candles.forEach { candle ->
                 val center = x(candle.position)
-                val color = if (candle.close >= candle.open) good else down
+                val color = candleColors.chartColor(candle.close >= candle.open, dark)
                 val top = y(maxOf(candle.open, candle.close))
                 val bottom = y(minOf(candle.open, candle.close))
                 val half = minOf(5.dp.toPx(), width * .022f)

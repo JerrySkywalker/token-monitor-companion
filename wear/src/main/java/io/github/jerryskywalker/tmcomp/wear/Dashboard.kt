@@ -238,7 +238,7 @@ private fun WatchTrend(data: Snapshot, defaults: WatchTrendSettings, maxGap: Lon
         if (style == TrendStyle.CANDLE) {
             candles.forEach { candle ->
                 val cx = x(candle.position)
-                val color = if (candle.close >= candle.open) Color(0xff91d789) else warning
+                val color = if (defaults.candleColors.usesGreen(candle.close >= candle.open)) Color(0xff91d789) else warning
                 val top = y(maxOf(candle.open, candle.close))
                 val bottom = y(minOf(candle.open, candle.close))
                 val half = minOf(3.dp.toPx(), size.width * .022f)

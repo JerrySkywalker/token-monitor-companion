@@ -16,6 +16,7 @@ import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.WearableListenerService
 import io.github.jerryskywalker.tmcomp.core.*
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -37,6 +38,17 @@ data class PhoneState(
     val connected: List<String> = emptyList(),
     val usageError: String? = null,
     val wearAvailable: Boolean? = null,
+    val quotaScope: String? = null,
+    val subscriptions: SubscriptionState? = null,
+)
+
+@Serializable
+data class SubscriptionState(
+    val data: HubSubscriptions? = null,
+    val checkedAt: Long = 0,
+    val revision: String? = null,
+    val unavailable: Boolean = false,
+    val stale: Boolean = false,
 )
 
 @Serializable
@@ -46,7 +58,15 @@ class PhoneSync(context: Context) {
     private val context = context.applicationContext
     val storage = DeviceStorage(context)
     private val transport = Transport(context)
-    fun state() = storage.read<PhoneState>(PHONE_VIEW_KEY) ?: PhoneState()
+    @Volatile private var lastView: Pair<String?, PhoneState>? = null
+
+    fun state(): PhoneState {
+        val encoded = storage.preferences.getString(PHONE_VIEW_KEY, null)
+        lastView?.let { (previous, state) -> if (previous === encoded) return state }
+        val state = encoded?.let { runCatching { wireJson.decodeFromString<PhoneState>(it) }.getOrNull() } ?: PhoneState()
+        lastView = encoded to state
+        return state
+    }
     private fun link(id: String) = storage.read<WatchLink>(LINK_PREFIX + id)
 
     private suspend fun save(value: PhoneState) {
@@ -61,11 +81,14 @@ class PhoneSync(context: Context) {
     suspend fun connect(credentials: HubConnection) = mutex.withLock {
         val previous = state()
         val old = storage.credentials()
-        val snapshot = Hub(credentials).snapshot(previous.snapshot.takeIf {
-            old?.origin == credentials.origin && old.secret == credentials.secret
-        }, extendedTrends = true)
+        val sameHub = old?.origin == credentials.origin && old.secret == credentials.secret
+        val hub = Hub(credentials)
+        val snapshot = hub.snapshot(previous.snapshot.takeIf { sameHub }, extendedTrends = true)
+        val quotaScope = previous.quotaScope.takeIf { sameHub } ?: UUID.randomUUID().toString()
+        val subscriptions = fetchSubscriptions(hub, snapshot, previous.subscriptions.takeIf { sameHub })
+        recordQuotas(quotaScope, snapshot)
         storage.saveCredentials(credentials)
-        save(previous.copy(snapshot = snapshot, usageError = null))
+        save(previous.copy(snapshot = snapshot, usageError = null, quotaScope = quotaScope, subscriptions = subscriptions))
         schedule(context)
         syncWatches()
     }
@@ -75,13 +98,39 @@ class PhoneSync(context: Context) {
     private suspend fun refreshLocked() {
         val credentials = storage.credentials()
         val previous = state()
-        val usage = credentials?.let { attempt { Hub(it).snapshot(previous.snapshot, extendedTrends = true) } }
+        val hub = credentials?.let(::Hub)
+        val usage = hub?.let { attempt { it.snapshot(previous.snapshot, extendedTrends = true) } }
         if (usage != null) {
-            save(previous.copy(snapshot = usage.getOrNull() ?: previous.snapshot,
-                usageError = usage.exceptionOrNull()?.let { it.message ?: "Hub 连接暂不可用" }))
+            val snapshot = usage.getOrNull()
+            if (snapshot != null) {
+                val quotaScope = previous.quotaScope ?: UUID.randomUUID().toString()
+                recordQuotas(quotaScope, snapshot)
+                val subscriptions = fetchSubscriptions(hub, snapshot, previous.subscriptions)
+                save(previous.copy(snapshot = snapshot, usageError = null, quotaScope = quotaScope, subscriptions = subscriptions))
+            } else {
+                save(previous.copy(usageError = usage.exceptionOrNull()?.message ?: "Hub 连接暂不可用",
+                    subscriptions = previous.subscriptions?.copy(stale = true)))
+            }
         }
         syncWatches()
         usage?.getOrThrow()
+    }
+
+    private suspend fun recordQuotas(scope: String, snapshot: Snapshot) {
+        attempt { QuotaHistory(context).use { it.record(scope, snapshot) } }
+    }
+
+    private suspend fun fetchSubscriptions(hub: Hub, snapshot: Snapshot, previous: SubscriptionState?): SubscriptionState {
+        val now = Instant.now().epochSecond
+        val revision = snapshot.subscriptionsUpdatedAt
+        if (previous != null && previous.revision == revision && now - previous.checkedAt in 0 until 900 &&
+            (!previous.stale || now - previous.checkedAt < 60)) return previous
+        val result = attempt { hub.subscriptions() }
+        val data = result.getOrNull()
+        return if (data != null) SubscriptionState(data, now, revision)
+        else if ((result.exceptionOrNull() as? HubException)?.status == 404) {
+            SubscriptionState(checkedAt = now, revision = revision, unavailable = true)
+        } else SubscriptionState(previous?.data, now, revision, stale = true)
     }
 
     suspend fun discover() = mutex.withLock { syncWatches() }
@@ -174,7 +223,8 @@ class PhoneSync(context: Context) {
 
     suspend fun clear() = mutex.withLock {
         storage.saveCredentials(null)
-        save(state().copy(snapshot = null, usageError = null))
+        save(state().copy(snapshot = null, usageError = null, quotaScope = null, subscriptions = null))
+        attempt { QuotaHistory(context).use { it.clear() } }
         WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_NAME)
         syncWatches()
     }
@@ -182,8 +232,8 @@ class PhoneSync(context: Context) {
     private suspend fun send(watch: WatchConfig, link: WatchLink, snapshot: Snapshot?, detached: Boolean = false) {
         val usage = snapshot?.takeIf { !detached && watch.mode == Mode.PHONE && !watch.paused }
         if (usage != null) {
-            val trends = WatchTrendPacket(link.binding, usage.retrievedAt, usage.history.takeLast(366),
-                usage.trendSamples.takeLast(325).map { it.copy(devices = emptyMap()) })
+            val trends = WatchTrendPacket(link.binding, usage.retrievedAt, usage.history.takeLast(366).map { it.copy(tools = emptyList()) },
+                usage.trendSamples.takeLast(325).map { it.copy(total = it.total.copy(tools = emptyList()), devices = emptyMap()) })
             attempt { transport.send(PHONE_TRENDS + watch.id, wireJson.encodeToString(trends)) }
         }
         val payload = PhonePacket(link.binding, storage.credentials()?.origin.orEmpty(), watch.copy(report = null),

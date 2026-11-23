@@ -31,12 +31,13 @@ Token Monitor Companion is an open-source client for your existing Token Monitor
 
 ## Features
 
-- **Overview and widgets.** Add, remove, and drag cards in the overview. Pin up to four time filters. Select watched quotas by tool, account, and limit window. Glance home-screen widgets use the same list.
-- **Quotas and usage.** View account limits, balances, estimated costs, and reporting devices. Choose standard or compact quota cards and reorder accounts. Inspect line and candlestick charts with separate intraday and daily-history intervals.
+- **Overview and widgets.** Add, remove, and drag cards in the overview. Pin up to four time filters. Select watched quotas by tool, account, and limit window, then choose remaining or used values with bars or text. Glance home-screen widgets use the same preferences.
+- **Quotas and subscriptions.** Open account cards to see the remaining-quota trend and 14 days of observed daily changes. View plan, price, and renewal details when the Hub shares subscription records. Reorder accounts and choose standard or compact quota cards.
+- **Activity and devices.** Inspect line and candlestick trends for calendar ranges or the past 1, 2, 4, 8, or 12 hours. Tool distribution includes token-share bars. Reporting devices have their own layout and sort order.
 - **Watch dashboard.** Swipe through usage, grouped quotas, trends, and reporting devices. Open the dashboard from a Wear OS Tile. Preview and configure watch quota order, time range, chart interval and type, and OLED black from the phone.
-- **Appearance and cache.** Choose system, light, dark, or OLED black on Android. The last snapshot stays available when the Hub is temporarily unreachable.
+- **Appearance and cache.** Choose system, light, dark, or OLED black on Android. Choose which colors represent rising and falling candles on the phone and in the watch display preset. The last snapshot stays available when the Hub is temporarily unreachable.
 
-The overview and Activity tab share calendar filters. Intraday charts use observed increments between successful fetches. Longer ranges use the Hub's daily history. Missing observations remain gaps, and display intervals change chart buckets while keeping the existing fetch schedule.
+The overview and Activity tab share calendar filters. Intraday charts use observed increments between successful fetches. Longer ranges use the Hub's daily history. Display intervals change chart buckets while keeping the existing fetch schedule. Quota history builds up on the phone from successful readings, and days without comparable observations remain blank.
 
 ## Quick start
 

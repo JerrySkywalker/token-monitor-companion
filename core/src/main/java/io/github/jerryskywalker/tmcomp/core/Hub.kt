@@ -41,6 +41,12 @@ fun hubConnection(address: String, secret: String, allowInsecure: Boolean): HubC
 }
 
 class Hub(private val connection: HubConnection) {
+    suspend fun subscriptions(): HubSubscriptions = withContext(Dispatchers.IO) {
+        request("/api/subscriptions", 4_000, 1024 * 1024).useJson<HubSubscriptions>().also {
+            if (!it.ok) throw IOException("无法读取 Hub 订阅")
+        }
+    }
+
     suspend fun snapshot(previous: Snapshot? = null, extendedTrends: Boolean = false): Snapshot = withContext(Dispatchers.IO) {
         val stats = request("/api/stats", 12_000, 16 * 1024 * 1024).useJson<HubStats>()
         val now = Instant.now()
@@ -101,7 +107,8 @@ private fun captureTrend(snapshot: Snapshot, previous: List<TrendSample>, now: I
     if (snapshot.stale || (snapshot.today.tokens == null && snapshot.today.costUsd == null)) return recent
     // Retain at most one observation every five minutes, within the latest wall-clock day.
     val slot = time / 300_000
-    val sample = TrendSample(time, TrendCounter(snapshot.today.tokens, snapshot.today.costUsd),
-        snapshot.collectors.filterNot { it.stale }.associate { it.key to TrendCounter(it.today.tokens, it.today.costUsd) })
+    fun Period.counter(maxTools: Int) = TrendCounter(tokens, costUsd, tools.take(maxTools).map { it.copy(costUsd = null) })
+    val sample = TrendSample(time, snapshot.today.counter(40),
+        snapshot.collectors.filterNot { it.stale }.associate { it.key to it.today.counter(12) })
     return (recent.filter { it.at / 300_000 < slot } + sample).takeLast(325)
 }
