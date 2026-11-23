@@ -1,71 +1,87 @@
-# Token Monitor Companion
+<p align="center">
+  <img src="docs/assets/brand/token-monitor-companion.svg" width="92" height="92" alt="Token Monitor Companion app icon" />
+</p>
 
-在 Android 手机和 Wear OS 手表上查看 Token Monitor Hub 的用量、账户额度和余额。手机提供可自定义总览、额度页、趋势和 Glance 桌面小工具。手表提供 StopWatch 看板和系统 Tile。
+<h1 align="center">Token Monitor Companion</h1>
 
-## 安装
+<p align="center"><strong>See AI usage, account limits, and balances on Android and Wear OS.</strong></p>
 
-在 [GitHub Releases](https://github.com/JerrySkywalker/token-monitor-companion/releases/latest) 下载适合设备的 APK。
+<p align="center">English · <a href="README.zh-CN.md">简体中文</a></p>
 
-- **Android 11 或以上**。在手机安装 `token-monitor-companion-android-v0.2.0.apk`。
-- **Wear OS**。在手表安装 `token-monitor-companion-wear-os-v0.2.0.apk`，可使用 [Wear OS 无线调试](https://developer.android.com/training/wearables/get-started/debug-wifi) 侧载。
-- 两端 Release APK 使用同一个应用 ID 和发布证书。若已装开发版，Android 会拒绝用不同证书覆盖安装。卸载开发版会清除其本地设置，之后可在 Release 版重新连接 Hub。
+<p align="center">
+  <a href="https://github.com/JerrySkywalker/token-monitor-companion/releases/latest">Download APKs</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="docs/ACCEPTANCE.md">Acceptance results (Chinese)</a> ·
+  <a href="LICENSE">MIT License</a>
+</p>
 
-下载的 `SHA256SUMS.txt` 可用于核对两个 APK 文件。
+Token Monitor Companion is an open-source client for your existing Token Monitor Hub. The Android app works on its own. The optional Wear OS app can receive usage from the phone or connect to the Hub directly over Wi-Fi or available cellular data. A single Token Monitor Hub serves both apps. [Hub API](https://github.com/Javis603/token-monitor/blob/v0.95.1/docs/API.md#get-apistats)
 
-## 总览、趋势和排序
+## Screenshots
 
-- 打开「设置 → 总览时间筛选」，从当日、7 天、30 天、365 天、本周、本月、本年中固定至多四项。总览的「更多时间」可临时选择其余范围。
-- 总览的 Tokens 趋势和「活动」页共用所选时间范围。在活动页选择折线或 K 线，可点图表查看该采样区间或日记录的数值，也可切换到预估成本。
-- 当日趋势从手机成功读取 Hub 时积累样本，显示相邻采样之间观察到的增量。Hub 的公开接口提供日历史，首次使用无法回填早先的日内曲线。长范围从 Hub 日历史绘制，缺失的日期留空。K 线从各分桶首、尾、最高和最低的已有读数生成。
-- 「编辑总览」可添加、移除和拖动展示队列里的卡片。「额度与余额 → 调整顺序」可分别拖动额度、余额与支出的账户卡片。排序和固定范围会保存在本机。
-- 手表额度按短时、周期和余额分区。每个区内同一工具只显示一次，再列出其不同账户和时间窗。
+| Android overview | Account quotas | Usage trends |
+| :---: | :---: | :---: |
+| <img src="docs/assets/screenshots/android-overview.png" width="235" alt="Android overview of token usage and estimated cost" /> | <img src="docs/assets/screenshots/android-quotas.png" width="235" alt="Android quota cards with separate time windows for multiple AI tools" /> | <img src="docs/assets/screenshots/android-activity.png" width="235" alt="Android Activity screen with usage filters and a candlestick chart" /> |
 
-### v0.3.0 显示设置
+| Wear OS overview | Wear OS quota groups |
+| :---: | :---: |
+| <img src="docs/assets/screenshots/wear-os-overview.png" width="190" alt="Round Wear OS overview with token and cost totals" /> | <img src="docs/assets/screenshots/wear-os-quotas.png" width="190" alt="Round Wear OS dashboard showing quotas grouped by tool" /> |
 
-- 手机「设置 → 外观」支持跟随系统、浅色、深色和 OLED 纯黑。「关注额度」按工具、账号和限制窗口选择条目，桌面小工具使用同一列表。底部「设备」列出 Hub 采集设备，点击可按设备查看总览。
-- 手机「活动 → 趋势显示间隔」分别记住日内和日历史的间隔。设置只调整图表分桶，后台取数频率沿用现有同步方式。采样不足或不完整的折线分桶留空。
-- 已绑定手表在手机「Wear OS → 显示与实时预览」设置各额度分类的工具顺序、趋势范围、间隔、图表类型和 OLED。独立手表可在连接设置点「从手机导入显示设置」，再从手机「Wear OS → 独立手表显示预设」扫码发送。额度按分类纵向滚动。手表趋势也可在表上临时切换范围、间隔、指标和图表类型。
+<p align="center"><sub>Native Android and Wear OS emulator captures from the v0.3.0 source, with synthetic Hub data.</sub></p>
 
-## 连接现有 Token Monitor Hub
+## Features
 
-在手机 App 首页填写 Hub 的 **HTTPS 地址**（例如 `https://hub.example.com`）和 **Hub Secret**，点「连接 Hub」。之后可在「设置 → Token Monitor Hub」查看连接状态、编辑配置和检查连接。手机可以独立使用。
+- **Overview and widgets.** Add, remove, and drag cards in the overview. Pin up to four time filters. Select watched quotas by tool, account, and limit window. Glance home-screen widgets use the same list.
+- **Quotas and usage.** View account limits, balances, estimated costs, and reporting devices. Choose standard or compact quota cards and reorder accounts. Inspect line and candlestick charts with separate intraday and daily-history intervals.
+- **Watch dashboard.** Swipe through usage, grouped quotas, trends, and reporting devices. Open the dashboard from a Wear OS Tile. Preview and configure watch quota order, time range, chart interval and type, and OLED black from the phone.
+- **Appearance and cache.** Choose system, light, dark, or OLED black on Android. The last snapshot stays available when the Hub is temporarily unreachable.
 
-两端直接使用 [Token Monitor Hub API](https://github.com/Javis603/token-monitor/blob/v0.95.1/docs/API.md#get-apistats)。日常使用只需现有 Hub，无需部署 Companion Server。
+The overview and Activity tab share calendar filters. Intraday charts use observed increments between successful fetches. Longer ranges use the Hub's daily history. Missing observations remain gaps, and display intervals change chart buckets while keeping the existing fetch schedule.
 
-### 扫码导入到手表
+## Quick start
 
-1. 手机已连接 Hub，手机和手表连接到可相互访问的同一 Wi‑Fi。
-2. 在手表 App 点「从手机导入 Hub」。已有看板时，从齿轮进入连接设置。
-3. 在手机 App 打开「设置 → Wear OS → 扫描手表配对码」，扫表上的二维码，再点「发送 Hub 配置」。
-4. 等手机显示「手表已验证 Hub」。手表验证配置后保存，并进入「独立直连」。
+1. Download the `token-monitor-companion-android-v*.apk` for Android 11 or later. For a Wear OS watch, download `token-monitor-companion-wear-os-v*.apk` and install it via wireless debugging. Use `SHA256SUMS.txt` to verify the downloads. [GitHub Releases](https://github.com/JerrySkywalker/token-monitor-companion/releases/latest) · [Wear OS wireless debugging](https://developer.android.com/training/wearables/get-started/debug-wifi)
+2. In the phone app, enter your Hub's HTTPS address and Hub Secret, then tap **Connect Hub** (连接 Hub). **Settings → Token Monitor Hub** shows connection status and lets you update the configuration.
 
-扫码仅需局域网和手机相机，即使 Google Play 服务的手表同步不可用也能导入。二维码包含临时连接信息和一次性配对密钥，有效期两分钟。Hub 地址和 Secret 经 AES-GCM 加密发送。两端使用 Android Keystore 保护已保存的 Secret。
+Both Release APKs share an application ID and release certificate. Use the same signing channel for in-place upgrades. Switching between Debug and Release requires uninstalling the differently signed build, which clears its local configuration.
 
-### 手机推送
+## Wear OS setup
 
-1. 先在系统中配对 Android 手机和 Wear OS 手表，在两端打开 App。
-2. 在手机 App 进入「设置 → Wear OS」，找到并绑定手表。绑定后可导入当前手机的 Hub 地址和 Secret，为之后的独立直连做好准备。
-3. 返回手表设置，选择「手机推送」。手机从自己的 Hub 取数，经 Wear OS Data Layer 转发用量，手表回执显示「已同步」。手机也可设置暂停、置顶额度、外圈来源和直连刷新间隔，或请求刷新。
+| Mode | How the watch gets data |
+| --- | --- |
+| **Phone push** (手机推送) | The phone fetches the Hub snapshot and sends usage over the Wear OS Data Layer. |
+| **Direct** (独立直连) | The watch fetches the HTTPS Hub API using its own connection. |
 
-若已通过扫码在表上启用独立直连，先在手表连接页点「允许手机发现」，再在手机绑定。持续用量推送依赖两端可用的 [Wear OS Data Layer](https://developer.android.com/training/wearables/data/overview)。
+### Scan the QR code for direct mode
 
-### 独立直连
+1. Connect the phone and watch to the same Wi-Fi network and make sure they can reach each other.
+2. In the watch app, choose **Import Hub from phone** (从手机导入 Hub). If the dashboard is open, use its gear button to reach connection settings.
+3. On the phone, open **Settings → Wear OS → Scan watch pairing code** (扫描手表配对码). Scan the watch QR code and tap **Send Hub configuration** (发送 Hub 配置).
+4. Wait for **Watch verified the Hub** (手表已验证 Hub). The watch saves the connection and enters direct mode. It can then fetch over its own network. Tap the dashboard timestamp to refresh and check **Local fetch** (本机取数) in connection settings.
 
-- 通过扫码导入时，手表自动进入独立直连。使用系统绑定时，可在手机的「手表 Hub 直连设置」发送当前手机的 Hub 配置，或填写另一套配置，再选择「独立直连」。
-- 仅安装手表 App 时，可在手表点「本机配置 Hub」，直接输入 HTTPS 地址和 Secret。
-- 手表随后通过自己的 Wi‑Fi 或可用的蜂窝网络读取 Hub。点看板底部的时间手动刷新，再打开齿轮查看「本机取数」。这个时间代表手表最近一次成功读取的时间，即使采集器尚未上报新数据也会更新。
+The scan uses a two-minute, single-use code and an encrypted local Wi-Fi transfer. Android Keystore protects the saved Hub Secret on each device. A watch-only installation can enter the HTTPS address and Secret under **Configure Hub on watch** (本机配置 Hub).
 
-## 本地构建与验收
+### Use phone push or update watch display settings
 
-使用 JDK 17、Android SDK Platform 36、Build Tools 36.0.0 和 Platform Tools。从仓库根目录运行 PowerShell：
+1. Pair the devices in Wear OS system settings and open Token Monitor on both. On the phone, open **Settings → Wear OS** and bind the watch. If the watch is already in direct mode after scanning, enable **Allow phone discovery** (允许手机发现) in its connection settings first.
+2. Choose **Phone push** and check the watch's sync acknowledgement (已同步). For later switching to direct mode, send the Hub configuration from the bound watch's settings and select **Direct** after it is verified. Phone push requires the Wear OS Data Layer. [Data Layer overview](https://developer.android.com/training/wearables/data/overview)
+3. For a bound watch, use **Display and live preview** (显示与实时预览). To send a display preset to an independent watch, open **Import display settings from phone** (从手机导入显示设置) on the watch and scan from **Standalone watch display preset** (独立手表显示预设) on the phone.
+
+## Build and verify locally
+
+Use JDK 17, Android SDK Platform 36, Build Tools 36.0.0, and Platform Tools. Run from the repository root in PowerShell.
 
 ```powershell
 .\scripts\local-ci.ps1
 .\scripts\local-ci.ps1 -Release
 ```
 
-本地 CI 运行 Kotlin 单元测试和两端 Lint，并构建 Debug APK。加 `-Release` 会同时构建两端 Release APK。Gradle 的 Release 输出默认未签名。随 GitHub Release 发布的可安装文件由同一项目证书签名。
+Local CI runs Kotlin tests, Lint, and Debug builds for both apps. `-Release` also builds the unsigned Release APKs. Published APKs are signed with the project release certificate. [Emulator validation (Chinese)](docs/AVD.md) · [Acceptance results (Chinese)](docs/ACCEPTANCE.md)
 
-查看 [模拟器验收方法](docs/AVD.md) 和 [验收结论](docs/ACCEPTANCE.md)。
+## Acknowledgements and license
 
-采用 [MIT 许可证](LICENSE)。任务完成提醒由独立项目负责。仓库中的早期网关代码仅用于维护已有历史版本。
+Thanks to **Javis603 and the Token Monitor contributors** for the desktop collectors, Hub, and documented API that make this companion possible. See the upstream project for desktop collection and Hub hosting. [Javis603/token-monitor](https://github.com/Javis603/token-monitor)
+
+Thanks to **AoXIUy** for the Android companion reference. [AoXIUy/token-monitor-For-Android](https://github.com/AoXIUy/token-monitor-For-Android)
+
+Token Monitor Companion is licensed under the [MIT License](LICENSE).
